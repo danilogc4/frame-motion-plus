@@ -308,7 +308,7 @@ internal static class CapturePrinter
             $"{Ms(added)} ms; latency model ΔL = d + (M−1)/M·T = {Ms(model.GenerationTimeNs)} + {Ms(model.HoldNs)} = {Ms(model.AddedLatencyNs)} ms " +
             $"(M {model.Multiplier}, T {Ms(model.SourceIntervalNs)}); difference {Ms(added - model.AddedLatencyNs)} ms (the lead's wake and margin, the stride's alignment)"));
         var display = r.RefreshModeUsed == Pipeline.RefreshMode.Vrr
-            ? string.Create(Ic, $"the display's delay from hand-over to first pixel (variable refresh: no present lead, no rounding to a refresh; measured {Ms(s.StrideDelay.Count > 0 ? s.StrideDelay.Percentile(0.5) + s.PresentLeads.Percentile(0.5) : s.PresentLeads.Percentile(0.5))})")
+            ? string.Create(Ic, $"the display's delay from hand-over to first pixel (variable refresh: no present lead, no rounding to a refresh; measured {Ms(s.SubmitToShown.Count > 0 ? s.SubmitToShown.Percentile(0.5) : s.PresentLeads.Percentile(0.5))}, p50 of every present's hand-over to its first pixel)")
             : string.Create(Ic, $"present lead {Ms(s.PresentLeads.Percentile(0.5))} + the stride's rounding (p50 {Ms(s.StrideDelay.Count > 0 ? s.StrideDelay.Percentile(0.5) : 0)})");
         o.WriteLine(lat.Count == 0
             ? "  latency     no real frame shown in the measured window"

@@ -89,6 +89,69 @@ public class VerifierTests
         return rows;
     }
 
+    /// <summary>
+    /// A display running late by more than half a refresh (a whole refresh behind at its ceiling, every slot late) when the
+    /// run stops with the last decided slot not yet handed over: the slot after the last show falls inside "last show plus
+    /// half a refresh", and was judged "not shown" where the live accounting did not count it (the owner's 4x High run on
+    /// the TV: late 23,237 + not shown 1 against 23,238 live, a disagreement and a FAIL). A slot never handed over before
+    /// the last one handed over is still not shown.
+    /// </summary>
+    [Fact]
+    public void A_slot_not_yet_handed_over_when_the_run_stopped_is_not_judged_even_behind_at_the_ceiling()
+    {
+        const long P = 8_341_675;
+        var rows = new List<VerifierRow>();
+        for (var k = 0; k < 40; k++)
+        {
+            var t = T0 + (k * P);
+            rows.Add(new VerifierRow { Slot = k, Kind = VerifierKind.Generated, TargetNs = t, ActualNs = t + P + 1_000_000, SubmitNs = t - 900_000, LiveMiss = true });
+        }
+
+        rows[39] = rows[39] with { ActualNs = 0, SubmitNs = 0, LiveMiss = false };
+        var result = TelemetryVerifier.Verify(rows, P, vrr: true);
+        Log.WriteLine(result.Describe());
+        Assert.Equal(39, result.Judged);
+        Assert.Equal(39, result.Count(VerifierFinding.Late));
+        Assert.Equal(0, result.Count(VerifierFinding.NotShown));
+        Assert.Equal(0, result.Disagreements);
+
+        // One never handed over in the middle (a dropped slot) is still not shown.
+        rows[20] = rows[20] with { ActualNs = 0, SubmitNs = 0 };
+        var dropped = TelemetryVerifier.Verify(rows, P, vrr: true);
+        Assert.Equal(1, dropped.Count(VerifierFinding.NotShown));
+        Assert.Contains(dropped.Slots, s => s.Slot == 20 && (s.Finding & VerifierFinding.NotShown) != 0);
+    }
+
+    /// <summary>
+    /// Under variable refresh with the display 1.6 refreshes behind, a present the compositor discarded (no time)
+    /// has the shows of presents handed over two slots before it near its own time: those say nothing about where it went.
+    /// Only its neighbours in present order judge it, as the live accounting does (a 4x High run on the TV, slot 8911).
+    /// </summary>
+    [Fact]
+    public void Behind_under_variable_refresh_an_untimed_present_is_judged_by_its_neighbours_only()
+    {
+        const long P = 8_341_675;
+        var rows = new List<VerifierRow>();
+        for (var k = 0; k < 40; k++)
+        {
+            var t = T0 + (k * P);
+            rows.Add(new VerifierRow { Slot = k, Kind = VerifierKind.Generated, TargetNs = t, ActualNs = t + (8 * P / 5), SubmitNs = t - 900_000, LiveMiss = true });
+        }
+
+        // Slot 20 discarded; its neighbours shown 0.6 and 2.6 refreshes after its time, slot 18 0.4 before it.
+        rows[20] = rows[20] with { ActualNs = 0, LiveMiss = false, LiveUnjudged = true };
+        var result = TelemetryVerifier.Verify(rows, P, vrr: true);
+        Log.WriteLine(result.Describe());
+        Assert.Contains(result.Slots, s => s.Slot == 20 && (s.Finding & VerifierFinding.Unjudged) != 0);
+        Assert.Equal(0, result.Disagreements);
+
+        // Fixed refresh keeps its rule (any timed show of another present at its refresh).
+        var fixedRows = rows.Select(r => r with { ActualNs = r.ActualNs == 0 ? 0 : r.TargetNs + 100_000, LiveMiss = false }).ToList();
+        fixedRows[21] = fixedRows[21] with { ActualNs = fixedRows[20].TargetNs + 100_000 };
+        var grid = TelemetryVerifier.Verify(fixedRows, P);
+        Assert.Contains(grid.Slots, s => s.Slot == 20 && (s.Finding & VerifierFinding.RefreshTaken) != 0);
+    }
+
     [Fact]
     public void Each_definition_on_its_own()
     {

@@ -153,6 +153,17 @@ internal sealed partial class PresentLoop
         if (now > handover + half)
         {
             // Its first pixel could not come within half a refresh of its time: given up, a newer slot follows.
+            CeilingPacing?.OnDroppedLate();
+            Drop(_pending, now, now + _vrrLeadNs, PresentOutcome.DroppedLate);
+            return;
+        }
+
+        if (_pending.Kind == PresentKind.Write && _pending.SlotKind == Core.Scheduling.SlotKind.Generated
+            && CeilingPacing is { } ceiling && ceiling.TakeRetime(_pending.SlotIndex, now))
+        {
+            // At the output's ceiling the display has shown every present late (more than half a refresh) for a while and
+            // cannot catch up by itself: this generated slot is not presented (the image before it stays one
+            // refresh longer), so the next one finds the display free. Counted as a dropped slot.
             Drop(_pending, now, now + _vrrLeadNs, PresentOutcome.DroppedLate);
             return;
         }
@@ -219,6 +230,9 @@ internal sealed partial class PresentLoop
 
                     // Whether the display still follows the presents (episodes where it showed on its grid instead).
                     _vrrFollow?.OnShown(handover, shownNs, _grid.PeriodNs, deviation > half, _vrrLeadNs);
+
+                    // At the output's ceiling: running a whole refresh behind (reported) and its recovery.
+                    CeilingPacing?.OnShown(entry.SlotIndex, deviation, period, shownNs);
                 }
 
                 if (shownNs > handover)

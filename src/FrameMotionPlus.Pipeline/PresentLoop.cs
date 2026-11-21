@@ -241,6 +241,9 @@ internal sealed partial class PresentLoop : IDisposable
     /// <summary>Test hook, present thread: before each job is handled (stalls, allocation injection).</summary>
     public Action<PresentJob>? BeforeJob { get; set; }
 
+    /// <summary>The slots at the output's ceiling: reporting, and the recovery of <see cref="PlaybackOptions.CeilingPacing"/> (null: neither).</summary>
+    public CeilingPacingState? CeilingPacing { get; init; }
+
     /// <summary>Test hook, present thread, virtual clock only: after each present is accepted (read it back here).</summary>
     public Action<PresentedFrame>? OnPresented { get; set; }
 

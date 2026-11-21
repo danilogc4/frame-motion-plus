@@ -68,6 +68,7 @@ internal sealed class PacingLoop
     private long _progressNs;
     private long _nextProgressCheckNs;
     private long _launchNs = long.MinValue;
+    private double _displayPeriodNs;
 
     // Counters.
     private long _framesRead;
@@ -119,6 +120,7 @@ internal sealed class PacingLoop
         _startupFrames = Math.Max(1, startupFrames);
         _startLeadNs = startLeadNs;
         _resample = resample > 0 ? resample : 1.0;
+        _displayPeriodNs = scheduler.Options.DisplayRate.PeriodNs;
     }
 
     /// <summary>
@@ -162,6 +164,9 @@ internal sealed class PacingLoop
 
     /// <summary>Live quality switching (null: one quality): polled every turn, before the decision.</summary>
     public QualitySwitchControl? QualitySwitch { get; init; }
+
+    /// <summary>Told each write whether the slots are at the output's ceiling (null: no generator). See <see cref="CeilingPacingState"/>.</summary>
+    public CeilingPacingState? CeilingPacing { get; init; }
 
     /// <summary>Generation times dropped because they came from the quality before a switch.</summary>
     public long StaleGenerationTimes => Volatile.Read(ref _staleGenerationTimes);
@@ -468,6 +473,10 @@ internal sealed class PacingLoop
     {
         Volatile.Write(ref _presentLeadNs, update.LeadNs);
         _scheduler.UpdateDisplayTiming(update.AnchorNs - _presentLeadNs, update.Rate);
+        if (update.Rate.IsValid)
+        {
+            _displayPeriodNs = update.Rate.PeriodNs;
+        }
         Volatile.Write(ref _displayUpdates, _displayUpdates + 1);
     }
 
@@ -581,6 +590,7 @@ internal sealed class PacingLoop
             Volatile.Write(ref _maxOutstanding, outstanding);
         }
 
+        UpdateCeiling();
         var job = new WriteJob
         {
             SlotIndex = decision.SlotIndex,
@@ -609,6 +619,31 @@ internal sealed class PacingLoop
             force: true,
             breakBeforeB: (b.Frame.Marks & SourceFrameMarks.Discontinuity) != 0);
         return DecisionOutcome.Written;
+    }
+
+    /// <summary>
+    /// Tells <see cref="CeilingPacingState"/> whether the slots are at the output's ceiling under variable refresh (the
+    /// present thread reads it; nothing here decides). Allocation-free.
+    /// </summary>
+    private void UpdateCeiling()
+    {
+        if (CeilingPacing is not { } ceiling)
+        {
+            return;
+        }
+
+        if (_scheduler.ClockMode != ClockMode.Vrr)
+        {
+            ceiling.SetCondition(false, 0, 0); // fixed refresh: never at a ceiling (and nothing computed)
+            return;
+        }
+
+        var d = _scheduler.Diagnostics;
+        var multiplier = Math.Max(1, d.Multiplier);
+        ceiling.SetCondition(
+            d.ClockMode == ClockMode.Vrr && d.GenerationEnabled && d.Multiplier > 1,
+            d.SourceIntervalNs / multiplier,
+            _displayPeriodNs);
     }
 
     /// <summary>

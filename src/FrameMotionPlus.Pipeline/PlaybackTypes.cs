@@ -90,7 +90,7 @@ public sealed class PlaybackHooks
 }
 
 /// <summary>Variable refresh lost (<see cref="Lost"/>) or back, the episodes so far, and the one that ended's length (ns).</summary>
-public readonly record struct VrrFollowNotice(bool Lost, int Episodes, long DurationNs, bool Unfocused = false);
+public readonly record struct VrrFollowNotice(bool Lost, int Episodes, long DurationNs, bool Unfocused = false, int BehindAtCeiling = 0);
 
 /// <summary>What a session's source delivers (a file or a capture), in the terms every source shares.</summary>
 public readonly record struct SourceDescription
@@ -288,6 +288,30 @@ public sealed class PlaybackReport
 
     /// <summary>Variable refresh: how late a generated slot may be shown instead of skipped (0: skipped).</summary>
     public long LateGeneratedNs { get; set; }
+
+    /// <summary>Whether the recovery at the ceiling was on (<see cref="PlaybackOptions.CeilingPacing"/>; off without a generator).</summary>
+    public bool CeilingPacing { get; set; }
+
+    /// <summary>Decisions made with the slots at the output's ceiling under variable refresh.</summary>
+    public long CeilingDecisions { get; set; }
+
+    /// <summary>Generated slots left out to give a display a whole refresh behind a free refresh; after how many the next
+    /// show came at least half a refresh earlier, and after how many it did not.</summary>
+    public long CeilingRetimes { get; set; }
+
+    public long CeilingRetimesRegained { get; set; }
+
+    public long CeilingRetimesNotRegained { get; set; }
+
+    /// <summary>At the ceiling: timed shows in runs of 30 or more at least three quarters of a refresh late (the display
+    /// running behind, evenly), the runs, the longest (ns) and the most whole refreshes behind.</summary>
+    public long BehindShows { get; set; }
+
+    public long BehindEpisodes { get; set; }
+
+    public long BehindLongestNs { get; set; }
+
+    public int BehindMaxRefreshes { get; set; }
 
     /// <summary>Variable-refresh probes made before playback (more than one when the first did not find the display following).</summary>
     public int VrrProbeAttempts { get; set; }

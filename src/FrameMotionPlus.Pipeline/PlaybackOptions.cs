@@ -149,6 +149,16 @@ public sealed record PlaybackOptions
     public long LateGeneratedNs { get; init; } = LateGeneratedDefaultNs;
 
     /// <summary>
+    /// Variable refresh with the slots at the output's ceiling (no more than 1% longer than its shortest refresh period: 4x
+    /// a 29.97 fps source on a 119.88 Hz output, 8x on 240.016 Hz), whatever the generator: when the display has shown 30
+    /// presents in a row late (more than half a refresh after their slot's time), the next generated slot is not presented
+    /// (at most one every 5 s; none again until a show is on time if one did not help), so the display, which at its
+    /// ceiling cannot catch up by itself, gets a free refresh. Inert in every other case. <c>--ceiling-pacing off</c> turns it off
+    /// (running behind at the ceiling is reported either way).
+    /// </summary>
+    public bool CeilingPacing { get; init; } = true;
+
+    /// <summary>
     /// A file within 0.5% of a whole number of refreshes per frame plays that much slower or faster so it phase-locks to
     /// fixed refresh (60.000 fps on 119.88 Hz: 0.1% slower). Never a live source.
     /// </summary>

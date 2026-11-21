@@ -1111,3 +1111,272 @@ on the previous probe's answer), and the option's limit is 8 ms. Not fixed:
   accounts` failed once in a run of the whole Pipeline test project after the two follow-up fixes and then passed
   9 of 9 (5 alone, 4 with its class). It runs on the real clock; its failure message was not captured. To watch.
 
+
+## 4x VFG High on the TV: a display behind at its ceiling (2026-11-21)
+
+**The owner's run.** `fmp capture --mode 4k30-hdr --multiplier 4 --quality high`, fullscreen on HDMI-A-1 (119.88 Hz,
+variable refresh): 4 × 29.97 = 119.88 slots a second, exactly the TV's ceiling (shortest refresh period 8.342 ms). VFG
+Medium is fine there (216 s: 0 missed, 57.2 ms, hand-over to first pixel 2.95 ms); with High (about 6.0 ms a generated
+frame, p99 6.4) every frame was shown one refresh late, evenly, for the whole 196 s: 70.2 ms (D 59.1 + about 11 ms from
+hand-over to first pixel), all 23,238 slots late and "the display's", intervals 8.342 ms (sd 0.013), "variable refresh
+lost at 0.0 s for 195.9 s", and the verifier one slot apart from the live counters (late 23,237 + not shown 1), so FAIL.
+3x High is fine (not at the ceiling). An earlier 40 s file run of 4x High on the TV fell two refreshes behind when the
+window went fullscreen, regained one when a generated frame happened not to be shown, and stayed exactly one behind.
+
+**Two sessions.** The first (the morning) had no TV: after that day's system update **KWin 6.8.3 throttled any Vulkan
+FIFO surface covering HDMI-A-1 to about 28 presents a second, every present completing without a first-pixel time** (a
+compositor regression, not the TV or the app); its work was done on DP-3 at 8x (below). The machine then went back to
+KWin 6.8.2-2, NVIDIA 620.70.06 and Linux 7.3.4 (the versions of every earlier measurement) and the TV runs below were
+made in the afternoon: the real capture path, the console on a moving 30 fps picture (about 30 new frames a second
+through the cadence detector), fullscreen on HDMI-A-1 (KWin placement script), `--audio off --no-settings`.
+
+### On the TV
+
+| 4x High, 180 s | Latency p50 (p99) | Hand-over to first pixel p50 | Missed (late / left out) | Intervals sd, max | Frames left out | Start (first shows' lateness) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--ceiling-pacing off`, run 1 | 63.77 (65.08) ms | 4.96 ms | 1,152 / 0 | 0.862, 97.3 ms | — | 0.4, −0.1 … then 2.3 within 10 s |
+| `--ceiling-pacing off`, run 2 | 63.49 (64.44) ms | 4.61 ms | 0 / 0 | 1.972, 296.1 ms | — | 0.3, 3.1, 3.1 … |
+| on, the first build (left out at ¾ of a refresh), run 1 | 63.17 (64.07) ms | 4.32 ms | 37 / 1 | 0.218, 38.7 ms | 1 (124.4 s, regained) | 0.0, 2.6, 2.6 … |
+| on, the first build, run 2 | 63.59 (64.84) ms | 4.64 ms | 183 / 0 | 0.609, 97.2 ms | 0 | 0.6, 0.4 … then 2.1 within 10 s |
+| **on, final (left out at half a refresh), run 1** | **63.47 (64.29) ms** | 4.61 ms | **0 / 0** | 0.037, 12.4 ms | 0 | 0.7, 0.4, 0.4, 0.4, 3.2 … |
+| **on, final, run 2** | **63.70 (64.95) ms** | 4.81 ms | **81 / 1** | 1.985, 298.1 ms | 1 (135.2 s, regained) | 0.5, 0.2 … |
+
+(The long intervals are the game's own pauses: a gap in the source's frames is a gap in the slots.) Every run: D 58.6 to
+58.9 ms (arrival lag 27.0 + the generation's 31.6 to 31.8), 0 B on every thread, GC 0/0/0, the live counters and `fmp
+verify --vrr` agree. **None of the six fell a whole refresh behind; 4x High on the TV runs at 63.2 to 63.8 ms, not
+70.** It is not the 62 the arithmetic suggests because the display takes 4.3 to 5.0 ms (p50) from hand-over to first
+pixel, not the 2 to 3 of Medium. How the lateness (first pixel less the slot's time) moves, from the telemetry:
+
+1. **The start is clean**: the first shows come 0.0 to 0.7 ms after their time in every run. Within the first second
+   (or within ten) the lateness steps up by about 2.5 ms (to 2 to 3 ms) at one show, with nothing else changing: the GPU
+   (the next High generation starts 1.2 to 1.8 ms after the hand-over and takes 6 ms) delays that frame's way to the
+   screen. At the ceiling the step is never given back, and later steps add to it.
+2. **Then it creeps later, about 1 ms a minute** (0.9 to 1.1 with High in every run, 0.8 with Medium below): the
+   console's frames (the card's clock) come about 15 ppm faster than the TV's highest rate allows, so at 4x each show is
+   a little later than the one before (slots 8341.53 µs apart over run 1, from the capture timestamps). Nothing in the
+   display can undo it.
+3. **A pause in the game resets it** (a hold gives the display free refreshes: −0.5 to −0.9 ms after the 97 ms and 296 ms
+   gaps), and so does a left-out frame (4.2 → −0.9 ms in the final run 2, 6.4 → −1.1 in the first build's run 1). Without
+   either, the lateness passes half a refresh (run 1 with pacing off: the last 20 s, 1,152 slots late at 4.2 ms) and,
+   minutes later, a whole refresh: the owner's 70 ms.
+
+**What put the owner's run a whole refresh behind** was not reproduced with the default timing. One change does it at
+once: the generation started 0.4 ms later (`scheduler.marginMs` 0.1 instead of 0.5, so High at p50 finishes 0.2 to
+0.6 ms before its own hand-over and at p99 about on it): **a refresh behind from the very first shows (10.7, 8.3 ms
+late), two at 2.4 s, up to 7 for moments, 74.2 ms, 1,872 hand-overs late**, the recovery's one left-out frame not
+helping (the frames late from the GPU, not from a backlog) and so not repeated. So the one way seen here to lose a
+whole refresh is a generation finishing at its own hand-over, and the ceiling then keeps it lost; that this is what
+happened in the owner's run (High's p99 6.4 there against 6.27 here, or other GPU load) is an inference. The
+fullscreen transition is not it (the six starts were clean;
+`fmp capture` goes fullscreen 1.5 to 2 s before playback starts). Starting the generation 0.5 ms earlier instead
+(`marginMs` 1.0, 90 s): 0 missed, hand-over to first pixel 4.16 ms against 4.61, latency 63.70 ms (D 0.5 ms longer):
+no better, so the margin stays.
+
+**What the summary says** (the evening's wording, 4x Medium over 15 minutes): `ceiling  the slots at the output's
+ceiling for 107895 decisions (whole run); the display ran about a whole refresh or more behind there (… up to 1 …) for
+30 shows in 1 run(s), the longest 0.2 s; …; recovery on: 3 generated frame(s) left out after 30 late shows in a row so
+the display could catch up (3 brought the next show half a refresh earlier or on time, 0 did not; each counted above as
+a dropped slot)`, and once on stderr `fmp: the display had fallen behind at
+its ceiling (every frame shown late, evenly; …): one generated frame was left out so it could`. The "variable refresh
+lost" lines still come (the shows sit one shortest period apart at the ceiling, which the follow detector takes for a
+grid; 4 to 8 episodes in every run, pacing on or off); a run a whole refresh or more behind (none here) is reported as
+running behind instead (`ceiling` line, `follow` line, stderr). So the honest answer: **4x High holds the TV's ceiling
+at about 63.5 ms with one generated frame left out every two minutes or so when the game itself does not pause (and
+4x Medium at about 58 ms with one every five minutes, below); with pacing off both hold as long as the game pauses often
+enough, and otherwise drift into late slots and then a whole refresh behind.**
+
+### On DP-3 (the morning, without the TV)
+
+8x on DP-3 is 239.76 slots a second at a 240.016 Hz ceiling, the same situation 0.1% under it. VFG High (6.3 ms, also at
+1440p) cannot run at 8x, so a slow generator was emulated by experiment-only builds (not in the tree): a CUDA kernel
+holding all SMs on the generator stream right after each VFG Medium generation (1.31 ms), either counted in d (the
+scheduler plans for 3.0 ms: the GPU busy from about 0.6 to 3.6 ms after each hand-over, as High is at 4x on the TV) or
+not (the hold then spans the next hand-over). 60 s runs, 4k30-hdr:
+
+| DP-3 | Missed (all the display's) | Hand-over to first pixel p50 | Latency p50 |
+| --- | --- | --- | --- |
+| 8x Medium (committed binary / the unrun change) | 113 / 37 | — / 1.76 ms | 59.02 / 59.25 ms |
+| 8x Medium + 1.7 ms hold spanning the next hand-over | 5,905 | 3.85 ms | 61.13 ms |
+| 8x, hold counted (High-like), the unrun change, `--ceiling-pacing off` | **0** | 2.29 ms | 61.37 ms |
+| the same, `--ceiling-pacing on` (its generation gate) | **4,263** (12 left out) | 3.18 ms | 62.11 ms |
+| the same, the final code | **0** | 2.26 ms | 61.30 ms |
+
+At a ceiling a delay is worked off only at the slots' margin over the shortest period (DP-3 at 8x: 5 µs a slot, the 0.8
+to 2 s "lost" episodes of every 8x run are that); GPU work at the hand-over delays the display; **holding generations
+for the previous present's first pixel (part 1 of the unrun change) made it worse**: 70% of its 12,587 waits (mean
+1.39 ms) ended on the bound, which moved the GPU work onto the next hand-over. The recovery fired on hardware once there:
+the GPU 98% busy across every hand-over, the display 3.7 ms late on every frame from contention; one frame left out,
+the next show only 1.1 ms earlier, counted as not regained, none other for the rest of the run.
+
+### Ruled out
+
+The generation gate (part 1: removed, above). The fullscreen transition (clean starts). The variable-refresh lead at
+its 2.0 ms bound (it is, in every run, but it only places the hand-over). The two-in-flight cap (never the limit: no
+back-pressure or backlog skips). The app's own pipeline with the default margin (0 late hand-overs in every default run).
+
+### The fix (`--ceiling-pacing on|off`, on by default)
+
+- `CeilingPacingState` (`src/FrameMotionPlus.Pipeline/CeilingPacing.cs`), its condition set by the pacing thread at each
+  write (`PacingLoop.UpdateCeiling`): variable refresh, generating, the slots no more than 1% longer than the shortest
+  refresh period (at the ceiling: 4x on the TV, 8x on DP-3), **whatever the generator** (until the evening it also asked
+  for a generation over half a slot, which left 4x Medium out; see "Widened to every generator" below). Under fixed
+  refresh nothing is computed.
+- **Recovery** (present thread, `PresentLoop.Vrr.cs` `VrrTurn`/`OnShownVrr`): after 30 timed shows in a row late (more
+  than half a refresh after their slot's time, the accounting's own tolerance), the next generated slot is not
+  presented: the image before it stays one refresh longer and the display gets its free refresh. Never a real frame.
+  At most one every 5 s; if the next show is neither half a refresh earlier nor on time (within a quarter of a refresh:
+  a display really on a fixed grid, or late from the GPU rather than from a backlog), none again until a show is on time.
+  A slot given up as late stands it down. Each counts as a dropped slot. The first build of this session left a frame
+  out at three quarters of a refresh; the TV showed slots counted late for a minute or more before that (183 in the
+  first build's run 2, which never got there), hence half a refresh.
+- **Reporting** wherever the slots are at the ceiling, recovery on or off: runs of 30 or more shows at least three
+  quarters of a refresh late are counted as the display running behind (how many, up to how many refreshes, the runs,
+  the longest), in the `ceiling` line, the `follow` line (those late shows were running behind, not a loss) and stderr
+  (`fmp: the display is running a whole refresh behind at its ceiling (every frame shown evenly one refresh late …; not
+  an overlay)` instead of "an overlay or another window"). The late shows stay counted as late, the display's (which
+  never fails the verdict).
+- **Live counters against the verifier**, two fixes in `TelemetryVerifier.Verify`: (1) the owner's one-slot disagreement:
+  the run stopped with the last decided slot not yet handed over; with every show more than half a refresh late it fell
+  inside "last show plus half a refresh" and was "not shown" where the live accounting did not count it. A slot never
+  handed over after the last one handed over is no longer judged (reproduced on DP-3: late 5,433 + not shown 1 against
+  5,434 live; now 0 disagreements). (2) Found on the TV (the 0.1 ms margin run, slot 8911): under variable refresh with
+  the display 1.5 refreshes behind, a present KWin discarded (no time) had the shows of presents handed over two slots
+  earlier near its own time and was judged "refresh taken"; the live accounting judges it by its neighbours in present
+  order (unjudged). The verifier now does the same under variable refresh (fixed refresh unchanged). Every TV and DP-3
+  CSV of both sessions: 0 disagreements.
+- The latency line prints the measured p50 from hand-over to first pixel under variable refresh instead of the 2.000 ms
+  bound.
+
+### Unchanged cases on the TV
+
+The committed binary against this change, 90 s each, the same session:
+
+| TV, 90 s | Latency p50 (p99), committed / this change | Missed, committed / this change | `ceiling` line (this change) |
+| --- | --- | --- | --- |
+| 4x Medium | 57.44 (58.03) / 57.21 (57.84) ms | 0 / 0 | at the ceiling; recovery not yet armed for Medium then (widened below) |
+| 3x High | 56.79 (57.12) / 56.75 (57.34) ms | 0 / 0 | never at the output's ceiling |
+| 3x Medium | 52.08 (52.42) / 52.16 (52.42) ms | 0 / 0 | never at the output's ceiling |
+| 2x Medium | 46.62 (46.96) / 46.67 (46.99) ms | 0 / 0 | never at the output's ceiling |
+
+All variable refresh, every slot shown (119.9, 89.9, 89.9, 59.9 a second), the verifier agreeing; nothing left out.
+4x Medium creeps the same way as High (lateness 0.9 → 2.0 ms over the 90 s in both runs, from a start at 0.1 to
+1.3 ms: less GPU contention than High's 2.5 ms); without a pause in the game it would pass half a refresh after about four
+to five minutes, and the recovery did not act for it then (hence the widening below; the owner's 216 s Medium
+run, 2.95 ms from hand-over to first pixel, fits the creep).
+
+On DP-3 (morning): 8x Medium 59.02 / 59.03 ms, 113 / 255 missed (all the display's, in the ceiling's catch-up episodes;
+they vary run to run), 2x Medium 45.85 / 45.88 ms, 3 / 0 missed; the recovery inert in both.
+
+### Widened to every generator (evening)
+
+4x Medium on the TV, the setting the owner plays at for hours, creeps the same way (0.9 → 2.0 ms over 90 s above), so
+the condition no longer asks for a generation over half a slot: the recovery is armed whenever the slots are at the
+output's ceiling under variable refresh (`CeilingPacingState.SetCondition`, `Active`), still inert below a ceiling and
+at fixed refresh, `--ceiling-pacing off` still turning it off; trigger, limit and the "did it help" rule unchanged.
+Measured with that build, the console on a moving game picture, `--audio off`:
+
+| TV | Latency p50 (p99) | Missed (late / left out) | Frames left out | Lateness per minute (p50), ms |
+| --- | --- | --- | --- | --- |
+| 4x Medium, 900 s, recovery on | 58.25 (60.09) ms | 300 / 2 (+1 in the warm-up) | 3: at the start, 5 min 43 s, 10 min 37 s; all regained | 0.7, 1.2, 1.9, 2.6, 3.3, 3.8 → left out → 1.1, 1.9, 2.5, 3.3, 3.7 → left out → 1.3, 2.1, 2.8, 3.6 |
+| 4x Medium, 900 s, `--ceiling-pacing off` | 57.83 (59.96) ms | 1 / — | — | 0.8, 0.7, 0.9, 1.3, 2.1, 2.0, 1.0, 1.7, 2.5, 3.3, 0.8, 1.4, 2.2, 3.0, 3.8 |
+| 4x High, 300 s, recovery on | 63.68 (64.82) ms | 96 / 2 (+1 in the warm-up) | 3: at the start (7.7 ms late), 2 min 16 s, 4 min 30 s; all regained | 2.4, 3.3, 2.3, 3.1, 3.5 (no pause in the game) |
+
+- **The creep, measured over 15 minutes:** 0.6 to 0.7 ms a minute with Medium, from the console's clock against the
+  TV's (the run with recovery had no pause in the game at all: it reached half a refresh, 4.17 ms, after 5 min 40 s and
+  again 4 min 54 s after the left-out frame). The run with recovery off had ten game pauses of 0.2 to 1.3 s, each
+  setting the lateness back to −0.5 to −0.9 ms; it still reached 3.8 ms (p50; one slot late) in its last minute. A
+  stretch of play without pauses longer than about five minutes therefore drifts into late frames, and after about ten
+  more a whole refresh behind (the owner's 70 ms), unless a frame is left out.
+- **The start can be a refresh behind with Medium too:** the recovery run's first show came on time and the next ones
+  6.5 ms late (three quarters of a refresh, the display carrying something from the pre-roll); after 30 such shows
+  (0.25 s) one generated frame was left out and the next show was 0.1 ms late. This is the owner's "behind from 0.0 s"
+  at a smaller size; the runs without it started on time.
+- **What the 302 missed were:** the three left-out frames (two in the measured window) and 300 late shows, all within
+  4 to 5 ms of their time in the 30 to 40 s before each left-out frame: as the lateness crosses half a refresh, the
+  display's jitter puts some shows over it and some under (165 alone, 19 short runs) before 30 come in a row. A rule
+  counting 30 late of the last 64 would have left the frame out about a second sooner with about half the late shows
+  (85 against 159 before the first); not changed (the trigger was to stay as it was).
+- Live counters and `fmp verify --vrr` agree in every run; 0 B on every thread; GC 0/0/0 in the measured window.
+
+**DP-3, 8x Medium, 60 s** (now armed there too; the slots 5 µs longer than the period, so lateness works itself off
+slowly): 59.60 ms (p99 60.33), 31 missed: 30 late shows (2.4 ms, over the 2.08 ms tolerance) and one left-out frame at
+44.7 s after which the next show came 0.7 ms early, regained; three short "lost" episodes (0.1 to 0.8 s) against 2 to
+4 episodes and 37 to 255 late shows in the earlier 60 s runs without it. It left out one frame where a run of 30 late
+shows came, and nothing in the rest of the minute.
+
+**Below the ceiling, the TV, 60 s:** 3x Medium 52.07 ms (p99 52.38), 2x Medium 46.65 ms (p99 47.03); 0 missed, the
+`ceiling` line "the slots were never at the output's ceiling (--ceiling-pacing on: inert)" (committed binary, 90 s, in
+the table above: 52.08 and 46.62 ms).
+
+### Not done
+
+- Taking the remaining 2.5 ms (GPU contention after the hand-over) off: KWin's pass and the app's present work were not
+  separated; moving the generation 0.5 ms either way was no better or much worse.
+- Correcting the creep at its root (the card's clock against the TV's): the left-out frame handles it, a few minutes
+  apart, when the game does not pause.
+- Judging a run behind at the ceiling against its shifted time, so real misses inside it stand out.
+
+### Tests
+
+`CeilingPacingTests` (Pipeline, 18 cases): a display a refresh behind at its ceiling catches up with exactly one left-out
+generated frame after 30 late shows and is on time after; without the recovery it stays behind and is reported; two
+refreshes behind take two, 5 s apart; a source 40 ppm faster than the ceiling (the TV) loses one generated frame each
+time it falls half a refresh behind, no more than 30 late shows each time, over 10 minutes; normal play (on time, or 2.5
+ms slow with a wobble) never leaves a frame out; a loss of variable refresh on a fixed grid costs one; a display that
+keeps falling behind gets one at most every 5 s; the condition for each case (TV 2x, 3x, 4x; DP-3 4x, 6x, 8x; both at
+fixed refresh: at the ceiling or below it, whatever the generator) with the option on and off; the `ceiling` line and the
+stderr line.
+`VerifierTests` +2 (the slot after the last show, never handed over, behind at the ceiling: not judged; behind under
+variable refresh, an untimed present judged by its neighbours only, fixed refresh keeping its rule). `UserSettingsTests`
++1 (the option on both commands, its default, a bad value, the help).
+
+**Tests and checks** (afternoon, the TV working, whole solution `dotnet test FrameMotionPlus.slnx` with the console on):
+Core **719**, Platform 100 + 1 skip, Audio 76 of 77, Cuda 144, Vulkan 108, Gpu 129, Vfx 94 + 1 skip, Sources.V4l2 116 +
+30 skips, Pipeline **198 of 199** (20 new), Sources.File 153 of 154. Not from this change: `OffscreenVerificationTests.
+Nothing_is_interpolated_across_a_seek` and the FFmpeg `StructLayoutTests` (both fail on the committed tree since
+FFmpeg 9.1 came with that day's update); `PipeWireLoopbackTests` (35 ms target: clicks 100 ms off once; its class run
+again: 4 of 4). In the Pipeline project's own run before it, `WindowedTests` failed 3 of 7 with its windows next to the
+terminal on the TV (3 late hand-overs and 3 display misses in the first 2 s at fixed refresh); alternating the class
+between the committed tree and this change there: committed 7/7 then 5/7, this change 7/7 then 7/7, and 7/7 with the
+windows placed on DP-3: the TV's windowed timing, not this change. Build 0 warnings; `-r win-x64` build of the app 0
+warnings; NativeAOT publish clean; 0 B on every thread and GC 0/0/0 in the measured window of every TV run.
+
+After the widening (evening): Core **719**, Pipeline **198 of 199** (only `Nothing_is_interpolated_across_a_seek`, the
+FFmpeg 9.1 failure); build 0 warnings, NativeAOT publish clean.
+
+### What `docs/implementation-plan.md` and the design doc should say (not edited)
+
+- Under variable refresh with the slots at the output's ceiling (4x 29.97 on 119.88 Hz) a display cannot recover lost
+  time by itself, and a capture card's clock a few tens of ppm faster than the output's highest rate makes it lose time
+  steadily; one generated slot is left out when the shows have been late for 30 in a row (any generator), and running
+  behind is reported apart from a loss of variable refresh.
+- A generation that finishes at its own hand-over loses a whole refresh at a ceiling; GPU work right after a hand-over
+  costs a few milliseconds of display delay under KWin; holding generations for the previous first pixel makes it worse.
+
+### Found by the independent review of the ceiling recovery (2026-11-21)
+
+Approved with no must-fix. The reviewer's own runs on the TV with the console: 4x Medium 180 s, 58.46 ms (p99 59.61),
+none missed, nothing left out (lateness crept from 1.7 to 3.6 ms, short of the trigger); 3x Medium 52.13 ms and
+3x High 56.74 ms, inert; one 4x Medium run started a refresh behind (7.2 ms late) and generated slot 33 was left out,
+the next show 0.2 ms early. Every left-out slot inspected (eight) was a generated one; `fmp verify --vrr` gives the
+same answers as the committed build on 22 of 24 recorded CSVs and differs only on the two behind-at-ceiling runs,
+where the disagreements go to 0. Fixed afterwards: an armed recovery is stood down when a show comes back within half
+a refresh before the next generated hand-over (it would have left one frame out needlessly). Not fixed:
+
+- **No deterministic test reaches the present loop's wiring.** Removing the "generated slots only" guard
+  (`PresentLoop.Vrr.cs:161`) and making `OnDroppedLate` a no-op (`:156`) still passes every test: the unit tests
+  apply that rule in their own display model, and no session-level test runs at a ceiling (the simulated-display
+  tests use 2x). To add: a simulated session at 4x on a 119.88 Hz display with a one-off 9 ms delay, asserting one
+  dropped slot, that it is generated, and on-time shows after it.
+- **"Variable refresh lost" is printed in healthy long 4x runs** (the reviewer's run: none missed, yet "lost 2x for a
+  total of 120.2 s" and the stderr line about an overlay): at a ceiling, shows sit on the refresh grid by
+  construction, which is what the follow detector looks for. When the slots are at the ceiling and no show inside
+  the episode is late it should say "at its ceiling", not "lost".
+- **A loss of variable refresh can cost more than one frame in one phase band** (simulated, not seen on hardware):
+  with the grid within jitter of the latch point a real backlog forms, a left-out frame helps, and it slips again:
+  seven frames, one every 5 s for 30 s, in 3 of 80 simulated cases; 0 to 2 in the rest.
+- **About 100 slots are counted late before each left-out frame** (the trigger's threshold equals the lateness
+  tolerance): invisible, but an earlier threshold would avoid them.
+- Not exercised on hardware by the review: a genuine loss of variable refresh, a quality switch, an HDR/SDR switch
+  and 4x High (the author's CSVs and reading stand for those).
+

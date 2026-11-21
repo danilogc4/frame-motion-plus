@@ -339,6 +339,10 @@ internal static class CommandDispatcher
                                     show the generated frame up to this much after its time (its content moved to match)
                                     instead of skipping it (the image before then stays a whole slot longer). Costs no
                                     latency; 0 skips it as before                                       (4)
+          --ceiling-pacing <on|off> Variable refresh with the slots at the output's ceiling (4x 29.97 on 119.88 Hz, 8x
+                                    on 240 Hz): a display that has fallen behind cannot catch up by itself, so after 30
+                                    late shows in a row one generated frame is left out (at most one every 5 s). Inert
+                                    below the ceiling and at fixed refresh; running behind is reported either way (on)
           --cuda-sync <mode>        How threads wait in CUDA synchronisations: blocking (sleep; VFG's blocking call
                                     then costs about 0.06 instead of 0.35 ms of CPU per slot), spin, yield, auto (blocking)
           --gate                    The Phase 4 gate: exactly VFG Medium at 2x, looped, 10 minutes (--duration-s may
@@ -407,7 +411,7 @@ internal static class CommandDispatcher
                                     refresh, which --clock auto uses (the lowest latency); a window is fixed refresh
           --generator, --quality, --quality-switch, --no-quality-switch, --multiplier, --output-hz, --duration-s, --window,
           --fullscreen, --clock, --validate, --csv, --settings, --no-settings, --vfx-sdk, --warmup-s, --present-lead-ms,
-          --latch-ms, --scd, --late-generated-ms, --cuda-sync   As for play (the
+          --latch-ms, --scd, --late-generated-ms, --ceiling-pacing, --cuda-sync   As for play (the
                                     duration is unlimited by default: until Ctrl+C, closing the window or Escape)
                                     Without a device or --mode, the saved capture.device and capture.mode are used if set
           --offscreen               No window: an offscreen target on the real clock at --display-hz

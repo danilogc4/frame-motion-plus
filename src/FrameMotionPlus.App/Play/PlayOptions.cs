@@ -94,6 +94,9 @@ internal sealed record PlayOptions
     /// <summary>Variable refresh: how late a generated slot may be shown instead of skipped, ms (0: skipped).</summary>
     public double LateGeneratedMs { get; init; } = Pipeline.PlaybackOptions.LateGeneratedDefaultNs / 1e6;
 
+    /// <summary><c>--ceiling-pacing on|off</c>: see <see cref="Pipeline.PlaybackOptions.CeilingPacing"/>.</summary>
+    public bool CeilingPacing { get; init; } = true;
+
     public double LatchMs { get; init; } = 1;
 
     /// <summary>How host threads wait in CUDA synchronisations (the primary context's scheduling flag).</summary>
@@ -153,6 +156,7 @@ internal sealed record PlayOptions
             WarmupS = r.Double("warmup-s", 2, 0, 600),
             PresentLeadMs = r.Double("present-lead-ms", -1, -1, 100),
             LateGeneratedMs = r.Double("late-generated-ms", Pipeline.PlaybackOptions.LateGeneratedDefaultNs / 1e6, 0, 8),
+            CeilingPacing = r.String("ceiling-pacing") is not { } ceiling || Vfg.VfgBenchOptions.ParseOnOff(ceiling, "ceiling-pacing"),
             LatchMs = r.Double("latch-ms", 1, 0, 50),
             CudaSync = ParseSync(r.String("cuda-sync")),
         };

@@ -101,6 +101,7 @@ internal static class PlayCommand
             PresentLeadNs = options.PresentLeadMs < 0 ? -1 : (long)(options.PresentLeadMs * Nanoseconds.PerMillisecond),
             LatchLeadNs = (long)(options.LatchMs * Nanoseconds.PerMillisecond),
             LateGeneratedNs = (long)Math.Round(options.LateGeneratedMs * Nanoseconds.PerMillisecond),
+            CeilingPacing = options.CeilingPacing,
             VfxSdkDirectory = options.VfxSdk,
             Settings = settings,
             CsvPath = options.CsvPath,

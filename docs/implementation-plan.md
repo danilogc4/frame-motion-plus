@@ -719,6 +719,26 @@ playback audio is left for later and Remote Play is left out entirely (both are 
   noticed at cuts, and no app-side cut detector wanted. This departs from the design doc's "leave
   automatic shot-change detection on".
 
+- **Running at a display's ceiling (2026-11-21, `docs/benchmarks/phase6-pacing.md`, last section):**
+  at 4x on the TV the slots are exactly the output's shortest refresh period, and a display at its
+  ceiling cannot catch up: every flip comes at least one period after the last. The console's
+  frames come about 15 ppm faster than the TV's top rate, so first pixels creep later (0.7 ms a
+  minute with Medium, 1 ms with High) until a pause in the game resets them; without one they pass
+  half a refresh, then a whole one (the owner's 4x High run: 70 ms for the whole run), and some runs
+  start most of a refresh behind. Now, at a ceiling under variable refresh, after 30 shows in a row
+  more than half a refresh late one generated frame is left out (never a real one, at most one every
+  5 s), which brings the next frame back on time; `--ceiling-pacing off` turns it off. Measured on
+  the TV: 4x Medium 58.3 ms over 15 minutes with three frames left out; 4x High 63.7 ms; 2x and 3x
+  untouched. Holding each generation until the previous frame was on screen was tried first and
+  made things worse. Not removed: about 2.5 ms of extra display delay with High at the ceiling.
+- **KWin 6.8.3 regression (same day):** after a system update, any Vulkan FIFO surface covering the
+  whole HDMI output was throttled to about 28 presents a second with no presentation timestamps
+  (not the app, the driver or the kernel: returning only KWin to 6.8.2 fixed it). The machine table
+  above describes Plasma 6.8.2; KWin is held there until a fixed release.
+- **FFmpeg 9.1 (same update):** two local tests fail on the committed tree
+  (`OffscreenVerificationTests.Nothing_is_interpolated_across_a_seek` and the FFmpeg layout check);
+  file playback needs a look against the new version.
+
 ### Phase 10: Windows portability
 
 *Design doc: milestone 7.* **Left for now by the owner on 2026-11-18** (listed under "Deferred"). The

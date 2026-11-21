@@ -75,6 +75,7 @@ public sealed class PlaybackSession : IDisposable
     private GeneratorHandle? _generator;
     private RingWriter? _writer;
     private PresentLoop? _presentLoop;
+    private CeilingPacingState? _ceiling;
     private PacingLoop? _pacing;
     private PlaybackSetup? _setup;
     private long _initialGenerationNs;
@@ -434,6 +435,7 @@ public sealed class PlaybackSession : IDisposable
         _bridge.Configure(new BridgeConfig { Width = width, Height = height, Format = format });
 
         var records = Math.Max(_o.TelemetryCapacity, 1024);
+        _ceiling = _generator is not null ? new CeilingPacingState(_o.CeilingPacing) : null;
         _writer = new RingWriter(_cuda, _generatorStream, _generator, format, RingWriterQueue, records)
         {
             BeforeJob = _hooks.BeforeWrite,
@@ -455,6 +457,7 @@ public sealed class PlaybackSession : IDisposable
             BeforeJob = _hooks.BeforePresent,
             OnPresented = _hooks.OnPresented,
             DropWhen = _hooks.DropPresent,
+            CeilingPacing = _ceiling,
         };
 
         var ring = _bridge.Ring!;
@@ -629,6 +632,7 @@ public sealed class PlaybackSession : IDisposable
                 OnTurn = _hooks.PacingTurn,
                 OtherMeters = [_writer.Meter, _presentLoop.Meter],
                 QualitySwitch = _qualitySwitch,
+                CeilingPacing = _ceiling,
             };
             _source.Start(origin);
             _presentLoop.EnableFillers();
@@ -902,6 +906,8 @@ public sealed class PlaybackSession : IDisposable
     /// <summary>Variable refresh lost: at most one "lost" line this often (the summary counts every episode).</summary>
     private const long FollowNoticeIntervalNs = 10 * Nanoseconds.PerSecond;
 
+    private const string CeilingRetimeNotice = "fmp: the display had fallen behind at its ceiling (every frame shown late, evenly; at its highest rate it cannot catch up by itself): one generated frame was left out so it could (--ceiling-pacing; at most one every 5 s, each counted in the summary)";
+
     /// <summary>The most the variable-refresh probe before playback may take (about 24 presents).</summary>
     private const long VrrProbeNs = 600 * Nanoseconds.PerMillisecond;
 
@@ -1044,6 +1050,8 @@ public sealed class PlaybackSession : IDisposable
         var beatVersion = 0L;
         var beatSaid = BeatKind.None;
         var beatSuggested = default(FrameRate);
+        var retimesSaid = false;
+        var stderr = _ceiling is { Recover: true } ? Console.Error : null; // touched here, before the measured window (its first use allocates)
         while (true)
         {
             meter.Tick();
@@ -1117,8 +1125,15 @@ public sealed class PlaybackSession : IDisposable
                     lostSaid = true;
                     lostSaidEpisode = episodes;
                     followNoticeAt = now;
-                    onFollow(new VrrFollowNotice(true, episodes, 0, _window is { HasInputFocus: false }));
+                    onFollow(new VrrFollowNotice(true, episodes, 0, _window is { HasInputFocus: false }, _ceiling?.BehindNow ?? 0));
                 }
+            }
+
+            if (!retimesSaid && stderr is not null && _ceiling!.Retimes > 0)
+            {
+                // Once: the display had fallen behind at its ceiling and was given a free refresh.
+                retimesSaid = true;
+                stderr.WriteLine(CeilingRetimeNotice);
             }
 
             if (OperatingSystem.IsLinux() && _hooks.OnCaptureBeat is { } onBeat && _source is CapturePlaybackSource beaten
@@ -1343,6 +1358,18 @@ public sealed class PlaybackSession : IDisposable
             report.LateShows = pl.LateShows;
             report.CompositorCatchUps = pl.CompositorCatchUps;
             report.VrrFollow = pl.VrrFollow?.Finish(Monotonic.NowNs);
+            if (_ceiling is { } ceiling)
+            {
+                report.CeilingPacing = ceiling.Recover;
+                report.CeilingDecisions = ceiling.CeilingDecisions;
+                report.CeilingRetimes = ceiling.Retimes;
+                report.CeilingRetimesRegained = ceiling.Regained;
+                report.CeilingRetimesNotRegained = ceiling.NotRegained;
+                report.BehindShows = ceiling.BehindShowCount;
+                report.BehindEpisodes = ceiling.BehindEpisodes;
+                report.BehindLongestNs = ceiling.BehindLongestNs;
+                report.BehindMaxRefreshes = ceiling.BehindMaxRefreshes;
+            }
             report.PlaybackStartNs = _pacing?.PlaybackStartNs is { } started && started != long.MinValue ? started : 0;
             pl.CopyLeadChanges(report.LeadChanges);
             report.OwnCatchUps = pl.OwnCatchUps;

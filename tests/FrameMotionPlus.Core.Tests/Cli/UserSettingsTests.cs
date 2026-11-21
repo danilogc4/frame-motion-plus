@@ -243,6 +243,22 @@ public sealed class UserSettingsTests : IDisposable
         Assert.Contains(" Q ", help, StringComparison.Ordinal);
     }
 
+    /// <summary><c>--ceiling-pacing on|off</c> on both commands (on by default), and in the help.</summary>
+    [Fact]
+    public void Ceiling_pacing_is_an_option_of_both_commands_on_by_default()
+    {
+        Assert.True(CaptureOptions.Parse([]).CeilingPacing);
+        Assert.True(PlayOptions.Parse(["clip.mkv"]).CeilingPacing);
+        Assert.False(CaptureOptions.Parse(["--ceiling-pacing", "off"]).CeilingPacing);
+        Assert.True(CaptureOptions.Parse(["--ceiling-pacing", "on"]).CeilingPacing);
+        Assert.False(PlayOptions.Parse(["clip.mkv", "--ceiling-pacing=off"]).CeilingPacing);
+        Assert.Contains("'--ceiling-pacing' expects on or off, got 'auto'", Assert.Throws<UsageException>(() => CaptureOptions.Parse(["--ceiling-pacing", "auto"])).Message, StringComparison.Ordinal);
+        Assert.Throws<UsageException>(() => PlayOptions.Parse(["clip.mkv", "--ceiling-pacing"]));
+        var help = Run("--help").Out;
+        Assert.Contains("--ceiling-pacing <on|off> Variable refresh with the slots at the output's ceiling", help, StringComparison.Ordinal);
+        Assert.Contains("--late-generated-ms, --ceiling-pacing, --cuda-sync", help, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// <c>--scd on|off</c> (VFG's automatic shot-change detection) on both commands, off by default for a capture (a game's
     /// fast motion is what it takes for a cut) and on for a file; <c>generator.shotChangeDetection</c> saves it.

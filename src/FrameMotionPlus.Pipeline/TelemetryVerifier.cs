@@ -153,22 +153,29 @@ public static class TelemetryVerifier
         var result = new VerificationResult();
         var half = periodNs / 2;
 
-        // Slots scheduled after the last show are not judged: the run stopped before they could be shown.
+        // Slots scheduled after the last show are not judged: the run stopped before they could be shown. Nor are slots never
+        // handed over that come after the last one handed over (by slot): the run stopped before their hand-over. Without
+        // that, a display running late by more than half a refresh (behind at its ceiling) had the slot after its last show
+        // inside the window and judged "not shown" where the live accounting, rightly, did not count it.
         var lastShow = rows.Where(r => r.ActualNs > 0).Select(r => r.ActualNs).DefaultIfEmpty(long.MinValue).Max();
         toNs = Math.Min(toNs, lastShow == long.MinValue ? long.MinValue : lastShow + half);
+        var lastHandedOver = rows.Where(r => r.SubmitNs > 0 && r.Slot >= 0).Select(r => r.Slot).DefaultIfEmpty(long.MinValue).Max();
 
         // Presents in the order they were submitted, each with the image it carries.
         var presents = rows.Where(r => r.SubmitNs > 0).OrderBy(r => r.SubmitNs).ThenBy(r => r.Slot).ToList();
         var imageOf = new Dictionary<(long Slot, long Submit), long>();
+        var presentIndex = new Dictionary<(long Slot, long Submit), int>();
         var current = -1L;
-        foreach (var p in presents)
+        for (var i = 0; i < presents.Count; i++)
         {
+            var p = presents[i];
             if (IsNewImage(p.Kind))
             {
                 current = p.Slot;
             }
 
             imageOf[(p.Slot, p.SubmitNs)] = current;
+            presentIndex[(p.Slot, p.SubmitNs)] = i;
         }
 
         // Shows in the order their first pixels came out.
@@ -196,7 +203,7 @@ public static class TelemetryVerifier
                 lastScheduledImage = s.Slot;
             }
 
-            if (s.TargetNs < fromNs || s.TargetNs > toNs)
+            if (s.TargetNs < fromNs || s.TargetNs > toNs || (s.SubmitNs == 0 && s.Slot > lastHandedOver))
             {
                 if (s.TargetNs <= toNs && s.ActualNs > 0 && Math.Abs(s.ActualNs - s.TargetNs) > half)
                 {
@@ -222,10 +229,34 @@ public static class TelemetryVerifier
             else
             {
                 // Presented, time unknown: a timed show of another present at its refresh means it was not shown there.
+                // Under variable refresh only the timed presents next to it in present order count (the one shown in its
+                // place, before or after it): a display running a refresh or more behind shows presents handed over well
+                // before it at its time, which says nothing about where it went (the live accounting judges it the same way).
                 var taken = false;
-                foreach (var t in Near(showTimes, s.TargetNs, half))
+                if (vrr)
                 {
-                    taken |= shows[t].Slot != s.Slot || shows[t].SubmitNs != s.SubmitNs;
+                    var index = presentIndex[(s.Slot, s.SubmitNs)];
+                    var before = index - 1;
+                    while (before >= 0 && presents[before].ActualNs == 0)
+                    {
+                        before--;
+                    }
+
+                    var after = index + 1;
+                    while (after < presents.Count && presents[after].ActualNs == 0)
+                    {
+                        after++;
+                    }
+
+                    taken = (before >= 0 && Math.Abs(presents[before].ActualNs - s.TargetNs) <= half)
+                        || (after < presents.Count && Math.Abs(presents[after].ActualNs - s.TargetNs) <= half);
+                }
+                else
+                {
+                    foreach (var t in Near(showTimes, s.TargetNs, half))
+                    {
+                        taken |= shows[t].Slot != s.Slot || shows[t].SubmitNs != s.SubmitNs;
+                    }
                 }
 
                 f |= taken ? VerifierFinding.RefreshTaken : VerifierFinding.Unjudged;

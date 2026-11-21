@@ -252,8 +252,12 @@ where the display follows the presents (variable refresh), each slot is instead 
 (`--clock auto`, the default; `--clock fixed|vrr` to choose). There, a generated slot whose next real frame arrives a
 little too late for it is shown up to 4 ms after its time, its content moved to match, instead of being skipped (which
 would leave the image before it on screen a whole slot longer); it costs no latency, and `--late-generated-ms <ms>` sets
-the limit (0 skips them as before). A file a hair off the display's rate (60.000 fps on
-119.88 Hz) plays 0.1% slower to lock to it. At the end it prints a summary:
+the limit (0 skips them as before). When the slots come at the output's highest rate (4x a 29.97 fps source on a
+119.88 Hz TV), a display that has fallen behind cannot catch up by itself (and the console's clock, a little faster
+than the TV's highest rate, makes it fall behind about 1 ms a minute), so one generated frame is then left out so it can
+(after 30 late shows in a row, at most one every 5 s; `--ceiling-pacing off` turns it off), and the summary's `ceiling`
+line reports running behind either way.
+A file a hair off the display's rate (60.000 fps on 119.88 Hz) plays 0.1% slower to lock to it. At the end it prints a summary:
 slots, presents, every missed slot with its time and whose it was (the pipeline's unless the timestamps show the present
 was handed over in time and the display showed it late; misses while the output's rate changes are counted apart),
 output intervals from present feedback, the generation time d, the delay to light (lead + D + the stride's rounding),

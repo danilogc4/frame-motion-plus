@@ -162,7 +162,14 @@ internal static class PlayPrinter
             $"{(r.RefreshModeUsed == RefreshMode.Vrr ? VrrSkipText(s, r.LateGeneratedNs) : "")}"));
         if (r.VrrFollow is { } follow)
         {
-            o.WriteLine(VrrFollowLine(follow, r.PlaybackStartNs));
+            o.WriteLine(r.BehindShows > 0
+                ? VrrFollowLine(follow, r.PlaybackStartNs) + string.Create(Ic, $"; {r.BehindShows} of the late shows were the display running evenly behind at the output's ceiling, which looks the same and is not a loss (the ceiling line)")
+                : VrrFollowLine(follow, r.PlaybackStartNs));
+        }
+
+        if (r.RefreshModeUsed == RefreshMode.Vrr)
+        {
+            o.WriteLine(CeilingLine(r));
         }
 
         if (r.Verification is { } v)
@@ -490,6 +497,34 @@ internal static class PlayPrinter
     }
 
     /// <summary>
+    /// The ceiling line (variable refresh): whether the slots were at the output's ceiling, the display running a whole
+    /// refresh or more behind there (evenly: not a loss of variable refresh, and late shows not the pipeline's), and the
+    /// recovery's left-out slots.
+    /// </summary>
+    internal static string CeilingLine(PlaybackReport r)
+    {
+        if (r.CeilingDecisions == 0)
+        {
+            return r.CeilingPacing
+                ? "  ceiling     the slots were never at the output's ceiling (--ceiling-pacing on: inert)"
+                : "  ceiling     the slots were never at the output's ceiling (--ceiling-pacing off, or no generator)";
+        }
+
+        var behind = r.BehindShows == 0
+            ? "the display never ran a whole refresh behind there"
+            : string.Create(Ic,
+                $"the display ran about a whole refresh or more behind there (shows at least three quarters of a refresh late, 30 or more in a row; up to {r.BehindMaxRefreshes}; evenly, at its highest rate it cannot catch up by itself: not a loss of variable refresh) " +
+                $"for {r.BehindShows} shows in {r.BehindEpisodes} run(s), the longest {r.BehindLongestNs / 1e9:0.0} s; those shows are among the display's late shows above");
+        var recovery = !r.CeilingPacing
+            ? "recovery off (--ceiling-pacing off)"
+            : string.Create(Ic,
+                $"recovery on: {r.CeilingRetimes} generated frame(s) left out after 30 late shows in a row so the display could catch up " +
+                $"({r.CeilingRetimesRegained} brought the next show half a refresh earlier or on time, {r.CeilingRetimesNotRegained} did not; " +
+                $"each counted above as a dropped slot)");
+        return string.Create(Ic, $"  ceiling     the slots at the output's ceiling for {r.CeilingDecisions} decisions (whole run); {behind}; {recovery}");
+    }
+
+    /// <summary>
     /// The summary's line on the display following the presents under variable refresh: the episodes where it did not
     /// (first pixels on the refresh grid, sustained), the late shows inside and outside them, and the first few episodes.
     /// </summary>
@@ -532,13 +567,15 @@ internal static class PlayPrinter
     {
         const string Lost = "fmp: variable refresh lost: the display shows on its refresh grid, not when the presents come (an overlay or another window on that output?); slots may come late until it follows again";
         const string Unfocused = "fmp: variable refresh lost: the window is not the active one (another window took the focus, on either output; KWin gives variable refresh only to the active fullscreen window): click the picture or Alt+Tab back to it; slots may come late until then";
+        const string Behind1 = "fmp: the display is running a whole refresh behind at its ceiling (every frame shown evenly one refresh late: the slots come at its highest rate, so it cannot catch up by itself; not an overlay); --ceiling-pacing on leaves one generated frame out so it can";
+        const string BehindMore = "fmp: the display is running two or more refreshes behind at its ceiling (every frame shown evenly that late: the slots come at its highest rate, so it cannot catch up by itself; not an overlay); --ceiling-pacing on leaves one generated frame out so it can";
         const string Back = "fmp: variable refresh back after ";
         var buffer = new char[160];
         return n =>
         {
             if (n.Lost)
             {
-                error.WriteLine(n.Unfocused ? Unfocused : Lost);
+                error.WriteLine(n.Unfocused ? Unfocused : n.BehindAtCeiling == 1 ? Behind1 : n.BehindAtCeiling > 1 ? BehindMore : Lost);
                 return;
             }
 
