@@ -1,0 +1,52 @@
+##### present latch fs
+fmp bench present: Latch, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  probes      808 timed (496 made their refresh, 312 shown a refresh later, 3 early, 0 untimed)
+  made at     hand-over before the refresh: min -0.184, p10 0.132, p50 0.622 ms
+  missed at   hand-over before the refresh: p50 2.440, p90 3.441, max 4.928 ms
+  latch       between 4.928 ms (the latest hand-over that missed) and -0.184 ms (the earliest that made it) before the first pixel; a lead covering every miss seen: 5.178 ms
+##### present cadence fs
+fmp bench present: Cadence, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  presents    1197, 1197 timed, 0 untimed; 119.7/s on a 119.879 Hz output
+  intervals   p1 5.157, p50 8.342, p99 11.566, max 16.772 ms; 267 of 1196 more than a quarter refresh off the grid; 8 of two refreshes or more
+##### present latch fifo-latest-ready fs
+fmp bench present: Latch, FifoLatestReady, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  probes      774 timed (419 made their refresh, 355 shown a refresh later, 5 early, 0 untimed)
+  made at     hand-over before the refresh: min 0.065, p10 0.179, p50 0.682 ms
+  missed at   hand-over before the refresh: p50 3.062, p90 5.158, max 5.442 ms
+  latch       between 5.442 ms (the latest hand-over that missed) and 0.065 ms (the earliest that made it) before the first pixel; a lead covering every miss seen: 5.692 ms
+##### present latch mailbox fs
+fmp bench present: Latch, Mailbox, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  probes      799 timed (483 made their refresh, 316 shown a refresh later, 3 early, 0 untimed)
+  made at     hand-over before the refresh: min 0.063, p10 0.150, p50 0.430 ms
+  missed at   hand-over before the refresh: p50 0.872, p90 3.900, max 4.740 ms
+  latch       between 4.740 ms (the latest hand-over that missed) and 0.063 ms (the earliest that made it) before the first pixel; a lead covering every miss seen: 4.990 ms
+##### jitter
+    timer only              1198      0.6      1.7      3.1      4.7     18.1      0.8
+    full loop               1199      4.4     20.2     38.2     56.5     61.1      7.3
+
+  slots       full loop: 1199 (599 real, 600 generated, 0 repeated, 0 empty); missed 0 (skipped 0, done after display time 0), late for generation 0, over gate 0
+              timer only: 1198; missed 0 (skipped 0, done after display time 0), over gate 0
+  scheduler   M = 2, D = 16.683 ms, lead 1.808 ms, learnt wake lateness p99 0.108 ms, generation on
+  pipeline    1343 source frames (0 found the ring full), 1343 telemetry records for 1343 decisions drained (0 dropped)
+  gc counts   measured time (21.4 s, both loops): 0 (gen0/1/2 0/0/0); whole run incl. start-up: 0, 62744 B allocated process-wide (estimate)
+  allocated   pacing thread 0 B during the measured time; source thread 0 B
+  attribution OS timer and scheduling (timer-only loop): p99 132.5 us, p99.9 181.8 us
+              difference with the managed per-slot work: p99 -54.7 us, p99.9 -51.9 us (the work itself: p99 38.2 us, max 61.1 us)
+  jitter gate PASS: p99 wake lateness 77.8 us <= 0.500 ms, no GC, no allocation on the hot threads (design doc gate)
+  missed      PASS: full loop missed 0 slot(s) (skipped 0, done after display time 0), budget 0; the timer-only loop missed 0 in the same run
+  verdict     PASS (exit code 0)
+##### jitter --rt
+    timer only              1198      0.7      1.7      2.9     11.1    167.5      1.0
+    full loop               1199      6.3     23.1     38.6     50.6    108.8      9.7
+
+  slots       full loop: 1199 (599 real, 600 generated, 0 repeated, 0 empty); missed 0 (skipped 0, done after display time 0), late for generation 0, over gate 0
+              timer only: 1198; missed 0 (skipped 0, done after display time 0), over gate 0
+  scheduler   M = 2, D = 16.683 ms, lead 1.801 ms, learnt wake lateness p99 0.101 ms, generation on
+  pipeline    1343 source frames (0 found the ring full), 1343 telemetry records for 1343 decisions drained (0 dropped)
+  gc counts   measured time (21.4 s, both loops): 0 (gen0/1/2 0/0/0); whole run incl. start-up: 0, 70408 B allocated process-wide (estimate)
+  allocated   pacing thread 0 B during the measured time; source thread 0 B
+  attribution OS timer and scheduling (timer-only loop): p99 111.0 us, p99.9 173.3 us
+              difference with the managed per-slot work: p99 -60.8 us, p99.9 -73.4 us (the work itself: p99 38.6 us, max 108.8 us)
+  jitter gate PASS: p99 wake lateness 50.2 us <= 0.500 ms, no GC, no allocation on the hot threads (design doc gate)
+  missed      PASS: full loop missed 0 slot(s) (skipped 0, done after display time 0), budget 0; the timer-only loop missed 0 in the same run
+  verdict     PASS (exit code 0)

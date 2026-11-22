@@ -1,0 +1,13 @@
+fmp bench vfg: 4 cells, 600 generated frames each after 30 warm-up, paced at 120 Hz output (2x: 60 runs/s, 4x: 90 runs/s), content test pattern (box moving 4 x W/240 px per source frame), automatic shot-change detection on
+  machine     NativeAOT .NET 10.0.13, NVIDIA GeForce RTX 4080 SUPER, CUDA driver API 13.5, load average 1.61 1.27 1.70
+  sdk         VFX SDK 1.3.0 from /run/host/var/usrlocal/VideoFX (from $FMP_VFX_SDK)
+  d           GPU time of each generated frame's run on VFG's stream (CUDA event span), ms; host = wall time of the Enqueue call, ms
+  load        create + NvVFX_Load, then the generator's warm-up runs; VRAM = device memory the instance took (load and warm-up)
+  size   mode    format   M     d p50    p90    p99    max   host p50    p99   load ms  warm ms   VRAM MiB  check
+  2160p  medium  RGBA8   2x    2.28   3.48   4.57   6.15      2.17   4.76      26.7     21.6       1862  30/30 genuine, 30/30 beat blend (43.0 vs 22.5 dB), 228 late
+  2160p  medium  RGBA8   4x    2.02   3.04   3.98   5.43      1.92   3.88               (same instance)  30/30 genuine, 30/30 beat blend (43.2 vs 23.4 dB), 336 late
+  2160p  medium  RGB10A2 2x    2.02   3.50   4.13   4.86      1.91   3.37      38.4     20.8       1862  30/30 genuine, 30/30 beat blend (47.3 vs 27.6 dB), 218 late
+  2160p  medium  RGB10A2 4x    2.02   3.10   4.21   4.60      1.91   4.01               (same instance)  30/30 genuine, 30/30 beat blend (47.4 vs 28.4 dB), 338 late
+  first load  26.7 ms in this process (2160p medium RGBA8), including the SDK's one-time start-up; the CUDA JIT cache (~/.nv/ComputeCache or $CUDA_CACHE_PATH) decides cold vs warm
+  gate        not evaluated: the matrix has no 1440p Medium cell (gate: p99 d <= 7 ms)
+  verdict     PASS (exit code 0)

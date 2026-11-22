@@ -1,0 +1,29 @@
+##### present vrr fs SDR
+fmp bench present: Vrr, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  presents    780 at intervals 11.428/14.264 ms; 780 timed, 0 untimed
+  delay       first pixel − submit: p1 1.405, p50 5.696, p99 14.983 ms
+  intervals   of 779 consecutive shows: 54 a whole number of refreshes apart (fixed grid, ±0.25 ms), 87 as far apart as their presents (±0.25 ms)
+  verdict     neither: mixed or irregular
+##### present latch fs SDR
+fmp bench present: Latch, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  probes      822 timed (606 made their refresh, 216 shown a refresh later, 6 early, 0 untimed)
+  made at     hand-over before the refresh: min -0.084, p10 0.129, p50 0.189 ms
+  missed at   hand-over before the refresh: p50 5.183, p90 5.861, max 6.191 ms
+  latch       between 6.191 ms (the latest hand-over that missed) and -0.084 ms (the earliest that made it) before the first pixel; a lead covering every miss seen: 6.441 ms
+##### present cadence fs SDR
+fmp bench present: Cadence, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  presents    1200, 1200 timed, 0 untimed; 120.0/s on a 119.879 Hz output
+  intervals   p1 8.249, p50 8.342, p99 8.435, max 9.098 ms; 0 of 1199 more than a quarter refresh off the grid; 0 of two refreshes or more
+##### capture auto SDR
+              following the console: samples with 10 significant bits are HDR10, with 8 (how a PS5 is assumed to send SDR; not yet seen) SDR (BT.709, the same range); in the window H switches by hand, A follows again
+  output      HDR10 output for PQ content: swapchain A2B10G10R10UnormPack32 / Hdr10St2084EXT; transform Passthrough; HDR metadata sent (vkSetHdrMetadataEXT): BT.2020 primaries, D65 white; mastering 0.0001 to 1000 nits; MaxCLL 1000, MaxFALL not stated
+  timing      display 119.879 Hz; multiplier cap 2, effective 2 (stride 2: a new image every 2 refreshes); source interval T 33.366 ms; present lead 12.513 ms at the end (it did not need to adapt); scheduler margin 0.500 ms; phase-locked to the refreshes
+  clock       fixed refresh: slots are the output's refreshes (probe before playback, the third of up to 3 (the earlier ones did not find the display following yet): 34 of 45 pairs of shows as far apart as their presents, 0 on the refresh grid; first pixel 0.829 ms after the present, at most 2.247: fixed refresh)
+  presents    3354 shown (119.8/s); fillers 128, dropped late 3, dropped refused 0 (whole run); max in flight 2; presenter refusals 4121, rejected 0; 3721 of 3721 shows timed by their first pixel, 0 untimed in the window (kept out of the grid and the intervals; whole run: the compositor's report came without a time for 2, 2 report(s) never came)
+  intervals   from present feedback: mean 8.347 ms, sd 0.220 ms, p99 8.510 ms, max 16.648 ms, min 8.024 ms over 3354 (refresh period 8.342 ms); 0 of 3354 timed intervals more than a quarter refresh off the grid
+  missed      9 slot(s) (the verifier, from the telemetry alone: 9; agrees); the pipeline's 0: late present 0, early 0, dropped 0, untimed and its refresh taken 0, refresh without a new present 0, refused 0, skipped vblank 0, back-pressure 0, presenter backlog 0; the display's 9: shown late although handed over in time 4, given back after those 5, handed over in time and discarded by the compositor 0; during a refresh-rate change 0; unjudged 0; refreshes without a new present 2; late shows 6: the refresh given back by the compositor 0x, by the present thread 3x
+  at Medium   real frames shown 77.068 ms after their content time (p99 77.380, 838 frames, outside the switches); d p50 1.891 ms, p99 2.034 ms over 839; D p50 64.580 ms
+  latency     a real frame is shown 77.068 ms after its capture timestamp (p99 77.380): arrival lag 41.785 (USB delivery, upload, conversion) + the generation's 22.987 + present lead 12.513 + the stride's rounding (p50 0.010); before the timestamp, the card's own HDMI-to-USB latency is not measurable here (photodiode or camera)
+  output      at the end: HDR10 output for PQ content: swapchain A2B10G10R10UnormPack32 / Hdr10St2084EXT; transform Passthrough; HDR metadata sent (vkSetHdrMetadataEXT): BT.2020 primaries, D65 white; mastering 0.0001 to 1000 nits; MaxCLL 1000, MaxFALL not stated
+  WARNING     9 missed slot(s): 0 the pipeline's, 9 the display's, 0 during a rate change
+  verdict     PASS

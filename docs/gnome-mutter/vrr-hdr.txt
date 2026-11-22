@@ -1,0 +1,28 @@
+##### present vrr fs
+fmp bench present: Vrr, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  presents    780 at intervals 11.428/14.264 ms; 780 timed, 0 untimed
+  delay       first pixel − submit: p1 1.248, p50 3.719, p99 4.967 ms
+  intervals   of 779 consecutive shows: 0 a whole number of refreshes apart (fixed grid, ±0.25 ms), 465 as far apart as their presents (±0.25 ms)
+  verdict     neither: mixed or irregular
+##### present latch fs
+fmp bench present: Latch, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  probes      780 timed (545 made their refresh, 235 shown a refresh later, 6 early, 0 untimed)
+  made at     hand-over before the refresh: min -0.119, p10 0.130, p50 0.189 ms
+  missed at   hand-over before the refresh: p50 5.187, p90 5.880, max 6.174 ms
+  latch       between 6.174 ms (the latest hand-over that missed) and -0.119 ms (the earliest that made it) before the first pixel; a lead covering every miss seen: 6.424 ms
+##### present cadence fs
+fmp bench present: Cadence, Fifo, fullscreen 3840x2160 px, output 119.879 Hz (period 8.3417 ms); swapchain B8G8R8A8Unorm; present timing ImageFirstPixelOut
+  presents    1200, 1200 timed, 0 untimed; 120.0/s on a 119.879 Hz output
+  intervals   p1 8.270, p50 8.342, p99 8.413, max 12.054 ms; 4 of 1199 more than a quarter refresh off the grid; 0 of two refreshes or more
+##### capture vrr padrão
+              following the console: samples with 10 significant bits are HDR10, with 8 (how a PS5 is assumed to send SDR; not yet seen) SDR (BT.709, the same range); in the window H switches by hand, A follows again
+  timing      display 119.879 Hz; multiplier cap 2, effective 2 (stride 2: a new image every 2 refreshes); source interval T 33.366 ms; present lead 15.626 ms at the end (raised 1x when a frame's content missed the compositor's latch; peak 15.626 ms); scheduler margin 0.500 ms; phase-locked to the refreshes
+  clock       fixed refresh: slots are the output's refreshes (probe before playback, the third of up to 3 (the earlier ones did not find the display following yet): 31 of 45 pairs of shows as far apart as their presents, 0 on the refresh grid; first pixel 1.057 ms after the present, at most 2.143: fixed refresh)
+  lead        changes: Start 12.513 → Raised 15.626
+  presents    3340 shown (119.3/s); fillers 115, dropped late 18, dropped refused 0 (whole run); max in flight 2; presenter refusals 29031, rejected 0; 3694 of 3694 shows timed by their first pixel, 0 untimed in the window (kept out of the grid and the intervals; whole run: the compositor's report came without a time for 2, 2 report(s) never came)
+  intervals   from present feedback: mean 8.382 ms, sd 0.611 ms, p99 8.760 ms, max 16.890 ms, min 5.862 ms over 3340 (refresh period 8.342 ms); 10 of 3340 timed intervals more than a quarter refresh off the grid
+  missed      77 slot(s) (the verifier, from the telemetry alone: 77; agrees); the pipeline's 20: late present 12, early 0, dropped 0, untimed and its refresh taken 8, refresh without a new present 0, refused 0, skipped vblank 0, back-pressure 0, presenter backlog 0; the display's 57: shown late although handed over in time 24, given back after those 33, handed over in time and discarded by the compositor 0; during a refresh-rate change 0; unjudged 0; refreshes without a new present 16; late shows 36: the refresh given back by the compositor 0x, by the present thread 18x
+  at Medium   real frames shown 90.144 ms after their content time (p99 98.290, 826 frames, outside the switches); d p50 1.827 ms, p99 1.846 ms over 840; D p50 74.280 ms
+  latency     a real frame is shown 90.144 ms after its capture timestamp (p99 98.290): arrival lag 49.953 (USB delivery, upload, conversion) + the generation's 24.595 + present lead 15.626 + the stride's rounding (p50 0.080); before the timestamp, the card's own HDMI-to-USB latency is not measurable here (photodiode or camera)
+  WARNING     77 missed slot(s): 20 the pipeline's, 57 the display's, 0 during a rate change
+  verdict     PASS
