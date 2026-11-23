@@ -1,0 +1,35 @@
+# Envio direto à tela (direct scanout) na TV, 23/11/2026
+# WAYLAND_DEBUG=client; flags de wp_presentation_feedback.presented: 0x1 vsync, 0x2 hw_clock, 0x4 hw_completion, 0x8 zero_copy (envio direto)
+
+## fmp hdr-pattern bars --fullscreen --output @2160,403 (swapchain HDR10)
+quantidade flags
+    345 7
+descrição de cor enviada pelo WSI da NVIDIA:
+wp_image_description_creator_params_v1.set_max_cll(1000)
+wp_image_description_creator_params_v1.set_primaries_named(6)
+wp_image_description_creator_params_v1.set_tf_named(11)
+protocolos de tempo usados pelo WSI:
+wp_commit_timing_manager_v1.destroy
+wp_commit_timing_manager_v1.get_timer
+wp_fifo_manager_v1.destroy
+wp_fifo_manager_v1.get_fifo
+wp_fifo_v1.destroy
+wp_fifo_v1.set_barrier
+wp_fifo_v1.wait_barrier
+
+## fmp bench present --test cadence --fullscreen --output @2160,403 (swapchain SDR B8G8R8A8)
+quantidade flags
+     39 7
+descrição de cor enviada pelo WSI da NVIDIA:
+wp_image_description_creator_params_v1.set_primaries_named(1)
+wp_image_description_creator_params_v1.set_tf_named(9)
+protocolos de tempo usados pelo WSI:
+wp_commit_timing_manager_v1.destroy
+wp_commit_timing_manager_v1.get_timer
+wp_fifo_manager_v1.destroy
+wp_fifo_manager_v1.get_fifo
+wp_fifo_v1.destroy
+wp_fifo_v1.set_barrier
+wp_fifo_v1.wait_barrier
+
+# primaries 6 = bt2020, 1 = srgb; tf 11 = st2084_pq, 9 = srgb (wp_color_manager_v1)

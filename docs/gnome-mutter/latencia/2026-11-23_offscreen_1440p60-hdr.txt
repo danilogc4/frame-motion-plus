@@ -1,0 +1,58 @@
+fmp capture: /dev/video1 - Elgato 4K X: Elgato 4K X (uvcvideo, usb-0000:00:14.0-1)
+  asked       --mode 1440p60-hdr: 2560x1440 P010 at 59.94 fps, HDR10 or SDR as the console sends (for 60 fps games; generate to 119.88)
+  negotiated  2560x1440 P010 @ 59.94 fps, 5120 B per line, 11059200 B per frame (as asked)
+  colour      the device reports sRGB / Rec. 709 / Rec. 709 / default quantization → HDR10 (forced: the device reports SDR); matrix BT.2020 (forced); range Limited (forced); chroma Left (assumed: V4L2 does not report it)
+  signal      taken as PQ (SMPTE ST 2084), BT.2020 primaries, limited range, 10-bit YCbCr 4:2:0 with the BT.2020 matrix, chroma Left-sited; frames Rgb10A2 PQ / BT.2020 (full range, the code values passed through: 10 bits kept from capture to the swapchain)
+              fixed for the run (--hdr on); in the window H switches between SDR and HDR10 by hand, A follows the signal's depth
+  buffers     4 x USERPTR into CUDA pinned memory (the driver writes where the GPU copies from), 4096-byte aligned; source-change events not offered by the driver; input 0 (Camera 1): ok
+  cadence     on: 4x4-sample cells, 32x32-pixel tiles; repeat at or below / new at or above: SDR 0.0016 / 0.0050, PQ 0.0004 / 0.0050 of full scale (PQ thresholds in use)
+  generator   VFG Medium: the default: the VFX SDK was found
+              VFX SDK 1.3.0 from /run/host/var/usrlocal/VideoFX (from $FMP_VFX_SDK); loaded in 28.4 ms, warmed up in 13.2 ms, 854 MiB; automatic shot-change detection off (--scd off, a capture's default: every pair is interpolated, fast motion too; a real cut shows one morphed frame); output written straight into the ring slots
+  quality     Q switches Medium <-> High while playing: High loaded too in 290.1 ms, warmed up in 90.1 ms, 1290 MiB more GPU memory (the generator's instances together 2144 MiB); the switch is made between two frames, with no load (--no-quality-switch keeps one instance)
+  device      NVIDIA GeForce RTX 4080 SUPER, Vulkan driver 620.70.06; CUDA context scheduling BlockingSync
+  display     offscreen 2560x1440 Rgb10A2 at a nominal 119.88 Hz, real clock; transform Passthrough
+  output      HDR10 output for PQ content: offscreen Rgb10A2 images (HDR10 ST 2084); transform Passthrough; HDR metadata sent (vkSetHdrMetadataEXT): BT.2020 primaries, D65 white; mastering 0.0001 to 1000 nits; MaxCLL 1000, MaxFALL not stated
+  scaling     exact: 2560x1440 frames shown pixel for pixel on 2560x1440, no resampling
+  feedback    offscreen (a present completes with its GPU work); presents in flight capped at 2
+  ring        4 slots, pitch 10240 B; bridge budget 192 CUDA operations per write, lead at most 5
+  rates       signal 59.94 fps (the game's own rate is what the cadence detector finds), multiplier cap 2; warm-up 2 s, duration 12 s
+  settings    none (--no-settings)
+  audio       off: --audio off
+  timing      display 119.88 Hz; multiplier cap 2, effective 2 (stride 2: a new image every 2 refreshes); source interval T 33.366 ms; present lead 0.000 ms at the end (it did not need to adapt); scheduler margin 0.500 ms; phase-locked to the refreshes
+  clock       fixed refresh: slots are the output's refreshes
+  threads     pacing: SCHED_OTHER nice 0, cpus 0-19, timer slack 1 ns; generator: SCHED_OTHER nice 0, cpus 0-19, timer slack 1 ns; present: SCHED_OTHER nice 0, cpus 0-19, timer slack 1 ns
+  duration    12.00 s played, 10.00 s measured after 2 s of warm-up; stopped: duration reached
+  slots       1200 measured: 300 real, 300 generated, 600 repeated, 0 empty; late (real frame instead of a generated one) 0, starved 0, hold 0, discontinuity 0, fallback/stride 600
+  presents    1199 shown (119.9/s); fillers 0, dropped late 0, dropped refused 0 (whole run); max in flight 2; presenter refusals 0, rejected 0; 0 of 1439 shows timed by their first pixel, 0 untimed in the window (kept out of the grid and the intervals; whole run: the compositor's report came without a time for 0, 0 report(s) never came)
+  intervals   from present feedback: mean 8.342 ms, sd 0.781 ms, p99 11.130 ms, max 14.169 ms, min 2.536 ms over 1199 (refresh period 8.342 ms); 0 of 0 timed intervals more than a quarter refresh off the grid
+  missed      0 slot(s) (the verifier did not run); the pipeline's 0: late present 0, early 0, dropped 0, untimed and its refresh taken 0, refresh without a new present 0, refused 0, skipped vblank 0, back-pressure 0, presenter backlog 0; the display's 0: shown late although handed over in time 0, given back after those 0, handed over in time and discarded by the compositor 0; during a refresh-rate change 0; unjudged 0; refreshes without a new present 0; late shows 0: the refresh given back by the compositor 0x, by the present thread 0x
+  verifier    not run: the verifier judges windowed runs with first-pixel times
+  d           generation GPU time p50 1.504 ms, p99 1.767 ms, max 1.792 ms over 300; generator thread per write p50 0.086 ms, p99 0.173 ms
+              real-frame copy into the ring p50 0.038 ms, p99 0.179 ms over 300
+  quality     0 switch(es) (Q pressed 0x; called off before they were made 0; made before D was ready 0); at the end Medium; generation times of the quality before a switch dropped from the estimate 0
+  at Medium   real frames shown 49.876 ms after their content time (p99 50.980, 299 frames, outside the switches); d p50 1.504 ms, p99 1.767 ms over 300; D p50 49.800 ms
+  D           the scheduler's D 49.899 ms at the end (target 49.899: hold 16.728 + lead 2.288 [p99 d 1.777 + wake 0.011 + margin 0.500] + arrival 26.728 + alignment 4.156); over the window min 49.799, p50 49.800, max 49.899 ms
+  added       by frame generation (the scheduler's D less its arrival lag): hold 16.728 + lead 2.288 + alignment 4.156 = 23.171 ms; latency model ΔL = d + (M−1)/M·T = 1.767 + 16.683 = 18.450 ms (M 2, T 33.366); difference 4.721 ms (the lead's wake and margin, the stride's alignment)
+  latency     a real frame is shown 49.876 ms after its capture timestamp (p99 50.980): arrival lag 26.728 (USB delivery, upload, conversion) + the generation's 23.171 + present lead 0.000 + the stride's rounding (p50 0.000); before the timestamp, the card's own HDMI-to-USB latency is not measurable here (photodiode or camera)
+  pipeline    bridge lead at most 1 (limit 5); slots skipped for back-pressure 0, for presenter backlog 0; refresh-grid updates 0; ring writes: 361 copies, 360 generated, 0 fallbacks; writes out of order 0
+  faults      generator: none
+  capture     740 dequeued (stale, skipped as newest won: 0; dropped by the driver: 0; error-flagged 5, short 0); 735 captured → 367 unique, 368 repeats dropped, 0 dropped as the pipeline was behind, 367 published (0 of them repeats published to start on a still picture), 367 read by the pacing thread
+              detected game rate 29.97 fps (signal interval 16.683 ms); holds 1 (gaps over twice the game's interval); black frames 4; no-signal episodes 0; state at the end Idle; timestamps repaired 0, not CLOCK_MONOTONIC 0
+  capture t   timestamp intervals mean 16.683 ms, sd 9.4 µs, min 16.645, max 16.722 ms over 709; dequeue − timestamp (USB delivery) p50 16.570 ms, p99 16.630 ms, max 16.733 ms; timestamp → frame available p50 23.300 ms, p99 26.750 ms, max 26.868 ms; dequeue → upload judged p50 6.646 ms, p99 10.173 ms, max 10.428 ms
+  capture gpu upload p50 6.357 ms, p99 9.541 ms, max 9.672 ms; cadence metric p50 0.103 ms, p99 1.034 ms, max 1.180 ms; convert p50 0.114 ms, p99 0.312 ms, max 0.339 ms
+  cadence     metric (millionths of full scale) of new pictures: min 0, p50 220339 over 367; of repeats: p50 149, p99 156, max 156 over 368; unique-frame intervals p50 33.370, p99 33.410, max 133.471 ms
+  capture th  SCHED_OTHER nice 0, cpus 0-19, timer slack 1 ns
+  capture fps asked 59.94 fps (60000/1001, 16.6833 ms), set 59.94 fps (60000/1001, 16.6833 ms); extra repeats (one more than the content's steady cadence) 0, frames left out 0; no periodic beat at the end (the card's rate and the source's agree, or the content hides it)
+  colour      HDR10 at the end (fixed or chosen by hand); 0 switches; sample depth of the frames: 10-bit 731, 8-bit 0, could not tell (black or flat) 4
+  output      at the end: HDR10 output for PQ content: offscreen Rgb10A2 images (HDR10 ST 2084); transform Passthrough; HDR metadata sent (vkSetHdrMetadataEXT): BT.2020 primaries, D65 white; mastering 0.0001 to 1000 nits; MaxCLL 1000, MaxFALL not stated
+  scaling     at the end: exact: 2560x1440 frames shown pixel for pixel on 2560x1440, no resampling
+  cpu/pacing  0 B allocated, 49.1 µs CPU per slot (0.059 s over 1200 slots, 41669 loop turns)
+  cpu/generator 0 B allocated, 54.8 µs CPU per slot (0.066 s over 1200 slots, 6296 loop turns)
+  cpu/present 0 B allocated, 58.2 µs CPU per slot (0.070 s over 1200 slots, 10578 loop turns)
+  cpu/control 0 B allocated, 9.1 µs CPU per slot (0.011 s over 1200 slots, 2466 loop turns)
+  gc          measured window gen0/1/2 0/0/0; whole run 0/0/0; capture thread 0 B; workstation, concurrent, latency mode SustainedLowLatency, playback latency mode SustainedLowLatency
+  telemetry   1564 records (--csv writes them)
+  teardown    clean: ring drained, imports freed
+  validation  off (--validate turns it on)
+  audio       off (the reason is in the setup above)
+  verdict     PASS

@@ -1,0 +1,53 @@
+Porta PCIe da placa de vídeo presa em Gen1: evidências de 23/11/2026
+Máquina: Gigabyte B760M DS3H DDR4, BIOS F19 (27/09/2024), Intel Core i7-12700KF, RTX 4080 Super,
+kernel 7.3.4-ogc8.1.fc45 (CONFIG_PCIE_THERMAL=y), driver NVIDIA aberto 620.70.06. Boot de 20/11, sem suspensão.
+
+1) sudo lspci -vv -s 00:01.0 | grep -E "LnkCap|LnkSta|LnkCtl2"   (rodado pelo Danilo)
+		LnkCap:	Port #2, Speed 32GT/s, Width x16, ASPM not supported
+		LnkSta:	Speed 2.5GT/s, Width x16
+		LnkCap2: Supported Link Speeds: 2.5-32GT/s, Crosslink- Retimer+ 2Retimers+ DRS-
+		LnkCtl2: Target Link Speed: 2.5GT/s, EnterCompliance- SpeedDis-
+		LnkSta2: Current De-emphasis Level: -3.5dB, EqualizationComplete+ EqualizationPhase1+
+   -> o teto da própria porta é Gen1. A placa de vídeo não consegue subir sozinha.
+
+2) Velocidade atual de cada link (sysfs, sem root)
+0000:00:01.0  atual=2.5 GT/s   max=32.0 GT/s x16  porta x16 do processador (placa de vídeo)
+0000:01:00.0  atual=2.5 GT/s   max=16.0 GT/s x16  RTX 4080 Super
+0000:00:06.0  atual=2.5 GT/s   max=16.0 GT/s x4   porta x4 do processador (M.2)
+0000:02:00.0  atual=2.5 GT/s   max=8.0 GT/s  x4   SSD do sistema, Lexar NM620 (controlador MAXIO MAP1202): /boot e a raiz
+0000:00:1a.0  atual=16.0 GT/s  max=16.0 GT/s x4   porta do chipset
+0000:03:00.0  atual=16.0 GT/s  max=16.0 GT/s x4   Kingston NV2 (SEC_DISK)
+0000:00:1c.0  atual=2.5 GT/s   max=8.0 GT/s  x0   porta do chipset vazia
+0000:05:00.0  atual=5.0 GT/s   max=5.0 GT/s  x1   rede Realtek RTL8125 (limite do próprio chip)
+0000:06:00.0  atual=5.0 GT/s   max=5.0 GT/s  x1   Wi-Fi Intel AX210 (limite do próprio chip)
+   -> as duas portas do processador estão em Gen1; a do chipset, no máximo.
+
+3) nvidia-smi -q, GPU Link Info
+   PCIe Generation  Max 4, Current 1, Device Current 1, Device Max 4, Host Max 5
+   Replays Since Reset 0
+
+4) Resfriadores de PCIe do kernel (controlador de banda, bwctrl). O estado 0 é a velocidade máxima.
+/sys/class/thermal/cooling_device0 type=PCIe_Port_Link_Speed_0000:00:01.0 cur=4 max=4
+/sys/class/thermal/cooling_device1 type=PCIe_Port_Link_Speed_0000:00:06.0 cur=3 max=3
+/sys/class/thermal/cooling_device2 type=PCIe_Port_Link_Speed_0000:00:1a.0 cur=0 max=3
+/sys/class/thermal/cooling_device3 type=PCIe_Port_Link_Speed_0000:00:1c.0 cur=2 max=2
+/sys/class/thermal/cooling_device4 type=PCIe_Port_Link_Speed_0000:00:1c.2 cur=1 max=2
+/sys/class/thermal/cooling_device5 type=PCIe_Port_Link_Speed_0000:00:1c.3 cur=1 max=2
+   -> o "cur" só espelha a velocidade atual (a 1c.2 mostra 1 porque a rede só vai a 5 GT/s),
+      não prova que uma política térmica pediu Gen1. Nenhuma zona térmica usa esses resfriadores.
+
+5) Log do kernel
+   - nenhum "broken device, retraining non-functional downstream link at 2.5GT/s" (o recuo automático
+     do kernel, pcie_failed_link_retrain) no boot atual nem nos dois anteriores;
+   - nenhum "limited by" (link abaixo da capacidade) na enumeração, em nenhum dos 4 boots guardados;
+   - boot de 16/11 (kernel 7.3.3): só "0000:00:1c.0: removing 2.5GT/s downstream link speed
+     restriction" / "retraining failed", na porta vazia;
+   - portas e placa de vídeo nunca suspensas (runtime_suspended_time 0), sem suspensão do sistema.
+
+6) Serviços
+   - thermald 2.5.13 (--adaptive), sem thermal-conf.xml; a ordem de resfriadores só tem
+     rapl_controller, intel_pstate, intel_powerclamp, cpufreq e Processor;
+   - tuned 2.28, perfil throughput-performance-bazzite; nenhum perfil menciona cooling_device ou pcie.
+
+Conclusão: o teto em Gen1 está nas portas do processador. Quem o pôs (BIOS ou algo no Linux) não
+está provado. Teste proposto: escrever 0 no cur_state do resfriador da porta 00:01.0 (LATENCIA.md, seção 3.A).
