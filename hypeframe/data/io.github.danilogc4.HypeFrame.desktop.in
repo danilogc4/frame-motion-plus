@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HypeFrame
+GenericName=Geração de quadros
+Comment=Captura do PS5 com geração de quadros NVIDIA VFG (frame-motion-plus)
+Exec=@EXEC@
+Icon=io.github.danilogc4.HypeFrame
+Terminal=false
+Categories=Game;
+Keywords=fmp;frame;generation;ps5;elgato;hdr;vfg;captura;
+StartupNotify=true

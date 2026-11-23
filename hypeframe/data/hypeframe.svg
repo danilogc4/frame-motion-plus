@@ -1,0 +1,60 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B1020"></stop>
+      <stop offset="100%" stop-color="#151A2E"></stop>
+    </linearGradient>
+
+    <linearGradient id="frameGrad" x1="120" y1="100" x2="392" y2="412" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00E5FF"></stop>
+      <stop offset="100%" stop-color="#8B5CFF"></stop>
+    </linearGradient>
+
+    <linearGradient id="hGrad" x1="170" y1="150" x2="342" y2="362" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7AF7FF"></stop>
+      <stop offset="100%" stop-color="#B58CFF"></stop>
+    </linearGradient>
+
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"></feGaussianBlur>
+      <feMerge>
+        <feMergeNode in="blur"></feMergeNode>
+        <feMergeNode in="SourceGraphic"></feMergeNode>
+      </feMerge>
+    </filter>
+
+    <filter id="innerShadow" x="0" y="0" width="512" height="512">
+      <feOffset dx="0" dy="4"></feOffset>
+      <feGaussianBlur stdDeviation="6" result="offset-blur"></feGaussianBlur>
+      <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"></feComposite>
+      <feFlood flood-color="#000000" flood-opacity="0.18" result="color"></feFlood>
+      <feComposite operator="in" in="color" in2="inverse" result="shadow"></feComposite>
+      <feComposite operator="over" in="shadow" in2="SourceGraphic"></feComposite>
+    </filter>
+  </defs>
+
+  <!-- Outer rounded app tile -->
+  <rect x="40" y="40" width="432" height="432" rx="96" fill="url(#bgGrad)"></rect>
+
+  <!-- Subtle inner panel -->
+  <rect x="58" y="58" width="396" height="396" rx="82" fill="#0E1427" filter="url(#innerShadow)"></rect>
+
+  <!-- Offset/generated frame in the background -->
+  <rect x="162" y="126" width="190" height="190" rx="34" stroke="url(#frameGrad)" stroke-width="18" opacity="0.28"></rect>
+
+  <!-- Main frame -->
+  <rect x="138" y="154" width="190" height="190" rx="34" stroke="url(#frameGrad)" stroke-width="20" filter="url(#softGlow)"></rect>
+
+  <!-- Motion accents -->
+  <path d="M354 184H394" stroke="url(#frameGrad)" stroke-width="16" stroke-linecap="round" opacity="0.9"></path>
+  <path d="M364 220H412" stroke="url(#frameGrad)" stroke-width="12" stroke-linecap="round" opacity="0.7"></path>
+  <path d="M118 296H94" stroke="url(#frameGrad)" stroke-width="12" stroke-linecap="round" opacity="0.55"></path>
+
+  <!-- Stylized H -->
+  <rect x="180" y="182" width="28" height="134" rx="14" fill="url(#hGrad)"></rect>
+  <rect x="258" y="182" width="28" height="134" rx="14" fill="url(#hGrad)"></rect>
+  <rect x="198" y="236" width="78" height="24" rx="12" fill="url(#hGrad)"></rect>
+
+  <!-- Small highlight -->
+  <circle cx="330" cy="154" r="8" fill="#7AF7FF" opacity="0.9"></circle>
+</svg>
