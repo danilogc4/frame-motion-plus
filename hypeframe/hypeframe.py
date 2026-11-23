@@ -8,10 +8,12 @@ pelo Mutter antes de jogar e volta como estava ao parar.
 """
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
 import sys
+import time
 
 import gi
 
@@ -23,10 +25,13 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 APP_ID = "io.github.danilogc4.HypeFrame"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 HERE = os.path.dirname(os.path.realpath(__file__))
 CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "hypeframe")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+STATE_DIR = os.path.join(GLib.get_user_state_dir(), "hypeframe")
+HISTORY_FILE = os.path.join(STATE_DIR, "sessoes.json")
+HISTORY_MAX = 60
 LOG_MAX_LINES = 4000
 
 # --------------------------------------------------------------------------
@@ -34,31 +39,67 @@ LOG_MAX_LINES = 4000
 # --------------------------------------------------------------------------
 
 MODES = [
-    ("4k30-hdr", "4K 29,97 HDR10", 29.97),
-    ("1440p60-hdr", "1440p 59,94 HDR10", 59.94),
-    ("4k60-sdr", "4K 59,94 SDR", 59.94),
-    ("1440p60-sdr", "1440p 59,94 SDR", 59.94),
-    ("1080p60-sdr", "1080p 59,94 SDR", 59.94),
-    ("1440p120-sdr", "1440p 120 SDR", 120.0),
-    ("1080p120-sdr", "1080p 120 SDR", 120.0),
-    ("auto", "Automático (maior modo 10 bits)", None),
-    ("custom", "Personalizado (aba Captura)", None),
+    # (id do fmp, rótulo, taxa da captura, (largura, altura), formato)
+    ("4k30-hdr", "4K 29,97 HDR10", 29.97, (3840, 2160), "p010"),
+    ("1440p60-hdr", "1440p 59,94 HDR10", 59.94, (2560, 1440), "p010"),
+    ("4k60-sdr", "4K 59,94 SDR", 59.94, (3840, 2160), "nv12"),
+    ("1440p60-sdr", "1440p 59,94 SDR", 59.94, (2560, 1440), "nv12"),
+    ("1080p60-sdr", "1080p 59,94 SDR", 59.94, (1920, 1080), "nv12"),
+    ("1440p120-sdr", "1440p 120 SDR", 120.0, (2560, 1440), "nv12"),
+    ("1080p120-sdr", "1080p 120 SDR", 120.0, (1920, 1080), "nv12"),
+    ("auto", "Automático (maior modo 10 bits)", None, None, None),
+    ("custom", "Personalizado (aba Captura)", None, None, None),
 ]
+
+QUALITY_NAMES = {"low": "Baixa", "medium": "Média", "high": "Alta"}
+QUALITY_FROM_FMP = {"Low": "low", "Medium": "medium", "High": "high"}
+
+# Taxa do jogo (o fmp detecta sozinho; aqui serve para escolher o multiplicador e fazer as contas).
+GAME_RATES = {"30": 29.97, "60": 59.94}
+
+# Tempo do VFG por quadro gerado (p99, ms), medido numa RTX 4080 Super em 23/11/2026. Cada sessão troca estes
+# números pelos medidos nesta máquina (histórico em ~/.local/state/hypeframe).
+VFG_P99_DEFAULT = {
+    2160: {"medium": 2.03, "high": 17.0},
+    1440: {"medium": 1.77},
+}
+
+# Prioridade do ritmo: o que fazer quando o GNOME não pega um quadro a tempo (a "antecedência" do fmp).
+LEAD_POLICIES = [
+    ("low", "Menor atraso",
+     "A antecedência fica fixa. Quando o GNOME atrasa, aquele quadro aparece um refresh depois (um soluço)"),
+    ("balanced", "Equilíbrio",
+     "A antecedência sobe só até o teto (8 ms por padrão). Menos atraso que “Mais liso”, alguns soluços a mais"),
+    ("smooth", "Mais liso",
+     "A antecedência sobe o quanto precisar, até 2 refreshes (16 ms a 120 Hz). Menos soluços, mais atraso"),
+]
+
+# Quanto cada parte custa na conta do atraso, para a barra (cores da interface).
+PART_COLORS = {
+    "usb": (0.0, 0.72, 0.83), "copy": (1.0, 0.54, 0.24), "misc": (0.35, 0.38, 0.49),
+    "hold": (0.55, 0.36, 1.0), "gen": (0.71, 0.55, 1.0), "align": (0.18, 0.9, 0.62),
+    "lead": (1.0, 0.79, 0.30),
+}
 
 DEFAULTS = {
     # Início
     "mode": "4k30-hdr",
+    "fullscreen": True,
+    # Geração de quadros
+    "game_fps": "30",  # taxa do jogo: "30" ou "60"
+    "fg_target": "60",  # quadros por segundo na tela: "60", "120" ou "custom" (multiplicador/taxa à mão)
     "quality": "medium",
     "multiplier": 2,
     "output_hz_on": False,
     "output_hz": 119.88,
-    "fullscreen": True,
-    "clock": "auto",
-    # Imagem
-    "generator": "auto",
     "quality_switch": True,
     "scd": "off",
+    "lead_policy": "smooth",  # low (fixa), balanced (com teto), smooth (sobe o quanto precisar)
+    "lead_max": 8.0,
+    "generator": "auto",
+    "clock": "auto",
     "cuda_sync": "auto",
+    # Imagem
     "hdr": "on",
     "peak": 4000,
     "maxcll_on": False,
@@ -75,7 +116,7 @@ DEFAULTS = {
     "buffers": 4,
     "buffer_mode": "auto",
     "cadence": True,
-    # Tela e ritmo
+    # Telas e ritmo
     "lead_on": False,
     "lead": 5.5,
     "latch_on": False,
@@ -109,30 +150,45 @@ DEFAULTS = {
 PROFILES = [
     (
         "hdr",
-        "HDR fiel",
-        "TV em HDR (bt2100), HDR10 ligado, faixa limitada e BT.2020, como o PS5 manda",
+        "HDR fiel (4K)",
+        "4K30 em HDR10 e 30 → 60 com o VFG Média; TV em HDR (bt2100), faixa limitada e BT.2020, como o PS5 manda",
         "weather-clear-symbolic",
         {
-            "mode": "4k30-hdr", "hdr": "on", "range": "limited", "matrix": "bt2020",
+            "mode": "4k30-hdr", "game_fps": "30", "fg_target": "60", "quality": "medium", "generator": "auto",
+            "hdr": "on", "range": "limited", "matrix": "bt2020",
+            "clock": "auto", "tv_apply": True, "tv_color": "hdr", "tv_vrr": False,
+            "latch_on": False,
+        },
+    ),
+    (
+        "hdr-fast",
+        "Menor atraso com HDR (1440p)",
+        "1440p60 HDR10: a placa entrega cada quadro na metade do tempo e acaba a “loteria” do 4K30 "
+        "(−25 ms medidos em 23/11). A geração continua 30 → 60; a imagem fica em 1440p ampliada",
+        "starred-symbolic",
+        {
+            "mode": "1440p60-hdr", "game_fps": "30", "fg_target": "60", "quality": "medium", "generator": "auto",
+            "hdr": "on", "range": "limited", "matrix": "bt2020",
             "clock": "auto", "tv_apply": True, "tv_color": "hdr", "tv_vrr": False,
             "latch_on": False,
         },
     ),
     (
         "latency",
-        "Menor atraso",
-        "Tela do jogo em SDR e relógio VRR: 65 ms medidos só com ela ligada, mas sem o HDR do PS5",
+        "Menor atraso (SDR)",
+        "Tela do jogo em SDR e relógio VRR: 65 ms medidos em 22/11 só com ela ligada, mas sem o HDR do PS5",
         "power-profile-performance-symbolic",
         {
-            "mode": "4k30-hdr", "hdr": "follow", "range": "auto", "matrix": "auto",
+            "mode": "4k30-hdr", "game_fps": "30", "fg_target": "60", "quality": "medium", "generator": "auto",
+            "hdr": "follow", "range": "auto", "matrix": "auto",
             "clock": "vrr", "tv_apply": True, "tv_color": "sdr", "tv_vrr": False,
             "latch_on": False,
         },
     ),
 ]
-# Os perfis não mexem nas outras telas: ligar ou desligar cada uma é escolha à parte (aba Tela e ritmo).
+# Os perfis não mexem nas outras telas nem na prioridade do ritmo: são escolhas à parte.
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 RESTORE_DELAY_MS = 1500
 
 EXIT_MEANING = {
@@ -223,6 +279,23 @@ textview.log, textview.log text { background-color: transparent; color: #cfe1ff;
 textview.log { font-family: monospace; font-size: 11px; padding: 10px; }
 .cmd { font-family: monospace; font-size: 11px; color: #9ef3ff; }
 .profile-icon { color: #7af7ff; }
+.fg-rate { font-size: 34px; font-weight: 800; letter-spacing: -0.5px; color: #eefaff; }
+.fg-total { font-size: 24px; font-weight: 800; color: #9ef3ff; }
+.fg-caption { color: rgba(223,231,255,0.72); font-size: 13px; }
+.fg-note { color: rgba(223,231,255,0.60); font-size: 12px; }
+.measure { font-size: 22px; font-weight: 800; color: #eefaff; }
+.warn { color: #ffb347; }
+.bad { color: #ff6b81; }
+.good { color: #2ee59d; }
+.legend { font-size: 12px; color: rgba(223,231,255,0.85); }
+.legend-dot { min-width: 10px; min-height: 10px; border-radius: 3px; }
+.legend-dot.usb { background-color: #00b8d4; }
+.legend-dot.copy { background-color: #ff8a3d; }
+.legend-dot.misc { background-color: #59607d; }
+.legend-dot.hold { background-color: #8b5cff; }
+.legend-dot.gen { background-color: #b58cff; }
+.legend-dot.align { background-color: #2ee59d; }
+.legend-dot.lead { background-color: #ffc94d; }
 """
 
 
@@ -244,6 +317,16 @@ def load_config():
             values["others_off"] = []
             values["tv_vrr"] = False
             extra["migrated"] = True
+        if extra.get("version", 1) < 3:
+            # Versão 3: a geração de quadros ganhou aba própria. O multiplicador vira "quadros na tela" (60 ou 120
+            # para um jogo a 30), e a antecedência continua como era ("Mais liso": sobe o quanto precisar).
+            if values["output_hz_on"]:
+                values["fg_target"] = "custom"
+            else:
+                values["fg_target"] = {2: "60", 4: "120"}.get(values["multiplier"], "custom")
+            values["game_fps"] = "30"
+            values["lead_policy"] = "smooth"
+            extra["migrated3"] = True
     except (OSError, ValueError):
         pass
     extra["version"] = CONFIG_VERSION
@@ -269,6 +352,308 @@ def fmt_num(x):
 def valid_size(s):
     parts = s.lower().split("x")
     return len(parts) == 2 and all(p.isdigit() and int(p) > 0 for p in parts)
+
+
+def fmt_ms(x):
+    """Milissegundos com uma casa (ou nenhuma, de 100 para cima), vírgula decimal."""
+    if x is None:
+        return "?"
+    return f"{x:.0f}" if abs(x) >= 100 else f"{x:.1f}".replace(".", ",")
+
+
+# --------------------------------------------------------------------------
+# Geração de quadros: o modo, o multiplicador e a conta do atraso
+# --------------------------------------------------------------------------
+
+
+def mode_spec(v):
+    """(taxa da captura, (largura, altura), formato) do modo escolhido; None onde não se sabe."""
+    if v["mode"] == "custom":
+        size = tuple(int(p) for p in v["custom_size"].lower().split("x")) if valid_size(v["custom_size"]) else None
+        fps = float(v["custom_fps"]) if v["custom_fps"] else None
+        return fps, size, v["custom_format"] or "p010"
+    if v["mode"] == "auto":
+        return 29.97, (3840, 2160), "p010"  # na Elgato 4K X o maior modo de 10 bits é 4K30 P010
+    for mid, _label, fps, size, fmt in MODES:
+        if mid == v["mode"]:
+            if fps and v["capture_fps"]:
+                fps = float(v["capture_fps"])
+            return fps, size, fmt
+    return None, None, None
+
+
+def frame_bytes(size, fmt):
+    w, h = size
+    return w * h * {"p010": 3.0, "nv12": 1.5, "yuyv": 2.0}.get(fmt or "p010", 3.0)
+
+
+def res_key(height):
+    """A classe de resolução das medições do VFG: 2160, 1440 ou 1080."""
+    return 2160 if height >= 2000 else 1440 if height >= 1300 else 1080
+
+
+def res_label(height):
+    key = res_key(height)
+    return "4K" if key == 2160 else f"{key}p"
+
+
+def fg_multiplier(v, capture_fps=None):
+    """O multiplicador que o fmp recebe (teto de quadros na tela por quadro do jogo)."""
+    if v["fg_target"] == "custom":
+        if v["output_hz_on"]:
+            # --output-hz: o teto é a taxa de saída sobre a taxa da captura (não a do jogo).
+            return max(1, min(8, round(v["output_hz"] / round(capture_fps or 29.97))))
+        return v["multiplier"]
+    game = round(GAME_RATES.get(v["game_fps"], 29.97))
+    return max(1, min(8, round(int(v["fg_target"]) / game)))
+
+
+def screen_hz(state, conn):
+    """A taxa atual de uma tela pelo nome do modo no Mutter (3840x2160@119.880)."""
+    m = (state or {}).get("monitors", {}).get(conn) or {}
+    match = re.search(r"@([0-9.]+)", m.get("mode") or "")
+    return float(match.group(1)) if match else None
+
+
+def vfg_p99(measures, height, quality):
+    """O tempo (p99, ms) de um quadro gerado: o medido nesta máquina, senão o da RTX 4080 Super, senão None."""
+    key = res_key(height)
+    got = measures.get("vfg", {}).get(str(key), {}).get(quality)
+    return got if got is not None else VFG_P99_DEFAULT.get(key, {}).get(quality)
+
+
+def lead_estimate(v, hz, last):
+    """(antecedência usada na conta, texto) para a prioridade do ritmo escolhida."""
+    period = 1000.0 / hz
+    top = max(1.0, 2 * period - 0.5)  # o limite do fmp: cerca de 2 refreshes
+    start = v["lead"]
+    policy = v["lead_policy"]
+    if policy == "low":
+        return start, f"fixa em {fmt_ms(start)} ms"
+    if policy == "balanced":
+        cap = min(max(v["lead_max"], start), top)
+        return cap, f"de {fmt_ms(start)} até {fmt_ms(cap)} ms"
+    measured = None
+    if last and last.get("lead_policy", "smooth") == "smooth" and last.get("lead_end") and not last.get("lead_fixed"):
+        measured = min(last["lead_end"], top)
+    return (measured if measured is not None else top), f"de {fmt_ms(start)} até {fmt_ms(top)} ms"
+
+
+def estimate(v, hz, measures):
+    """Atraso da captura até o primeiro pixel, pelas contas do fmp (docs/gnome-mutter/LATENCIA.md, seção 1).
+
+    Com a base de 23/11/2026 (4K30 HDR, VFG Média, PCIe em Gen1, antecedência que subiu a 16,2 ms) dá 89,8 ms;
+    o fmp mediu 89,6. measures: "ms_per_mb" (cópia medida), "vfg" (p99 por resolução e qualidade), "last".
+    hz: a taxa da tela do jogo (None quando não se sabe: a conta usa 60 e não avisa sobre ela).
+    """
+    hz_known = hz is not None
+    hz = hz or 60.0
+    cap_fps, size, fmt = mode_spec(v)
+    cap_fps = cap_fps or 29.97
+    size = size or (3840, 2160)
+    parts, warns, notes = [], [], []
+    parts.append(("Placa de captura (USB)", 1000.0 / cap_fps, "usb"))
+    mb = frame_bytes(size, fmt) / 1e6
+    per_mb = measures.get("ms_per_mb")
+    parts.append(("Cópia para a GPU", mb * per_mb if per_mb else mb / 25.0, "copy"))
+    parts.append(("Conversão e folga", 2.7, "misc"))
+    game = min(GAME_RATES.get(v["game_fps"], 29.97), cap_fps)
+    t_ms = 1000.0 / game
+    mult = fg_multiplier(v, cap_fps)
+    wants = v["generator"] != "none" and mult >= 2
+    vfg = v["generator"] in ("auto", "vfg")
+    d = vfg_p99(measures, size[1], v["quality"]) if vfg else 0.3
+    fits = True
+    if wants:
+        budget = t_ms / mult
+        if d is not None and d > budget:
+            fits = False
+            warns.append(f"Com a {QUALITY_NAMES[v['quality']]} em {res_label(size[1])}, cada quadro gerado leva cerca de "
+                         f"{fmt_ms(d)} ms, e o limite é {fmt_ms(budget)} ms: o fmp desliga a geração")
+        else:
+            parts.append(("Espera da interpolação", (mult - 1) / mult * t_ms, "hold"))
+            parts.append(("Geração do quadro", (d if d is not None else 2.0) + 0.5, "gen"))
+    if hz_known and mult * game > hz * 1.01 and wants:
+        warns.append(f"A tela do jogo está a {fmt_num(hz)} Hz: não cabem {fmt_num(round(mult * game))} quadros por segundo")
+    if v["clock"] == "vrr":
+        lead, lead_txt = 2.0, "relógio VRR: entrega na hora"
+    else:
+        parts.append(("Encaixe no refresh", 500.0 / hz, "align"))
+        lead, lead_txt = lead_estimate(v, hz, measures.get("last"))
+    parts.append(("Antecedência", lead, "lead"))
+    if cap_fps < 40 and game > 25 and GAME_RATES.get(v["game_fps"], 29.97) < 40:
+        notes.append("Fora da conta: em 4K30 a placa pega uma de duas cópias de cada quadro do jogo; se for a segunda, "
+                     "a imagem chega 16,7 ms mais velha (8 ms em média)")
+    notes.append("Fora da conta: a TV (no modo jogo, cerca de 6 ms a 120 Hz) e o próprio jogo")
+    return {"parts": parts, "total": sum(p[1] for p in parts), "mult": mult, "gen": wants and fits,
+            "wants": wants, "fits": fits, "d": d, "t": t_ms, "game": game, "lead_txt": lead_txt,
+            "warns": warns, "notes": notes, "copy_measured": per_mb is not None, "height": size[1]}
+
+
+# --------------------------------------------------------------------------
+# Resultado de cada sessão (o resumo do fmp) e o histórico
+# --------------------------------------------------------------------------
+
+
+def parse_summary(text):
+    """Os números do resumo do `fmp capture` (os mesmos de docs/gnome-mutter/latencia/extrair.py)."""
+    def num(pattern):
+        m = re.search(pattern, text, re.M)
+        return float(m.group(1)) if m else None
+
+    r = {}
+    m = re.search(r"latency\s+a real frame is shown ([0-9.]+) ms after its capture timestamp \(p99 ([0-9.]+)\)", text)
+    if not m:
+        return None
+    r["latency"], r["latency_p99"] = float(m.group(1)), float(m.group(2))
+    m = re.search(r"negotiated\s+(\d+)x(\d+)\s+(\S+)\s+@\s+([0-9.]+) fps.*?(\d+) B per frame", text)
+    if m:
+        r["size"] = f"{m.group(1)}x{m.group(2)}"
+        r["height"] = int(m.group(2))
+        r["format"] = m.group(3).lower()
+        r["capture_fps"] = float(m.group(4))
+        r["frame_bytes"] = int(m.group(5))
+    m = re.search(r"slots\s+(\d+) measured: (\d+) real, (\d+) generated, (\d+) repeated", text)
+    if m:
+        r["slots"], r["real"], r["generated"], r["repeated"] = (int(m.group(i)) for i in range(1, 5))
+    r["missed"] = num(r"^\s*missed\s+(\d+) slot")
+    r["upload"] = num(r"capture gpu upload p50 ([0-9.]+) ms")
+    m = re.search(r"present lead ([0-9.]+) ms at the end(.*)$", text, re.M)
+    if m:
+        r["lead_end"] = float(m.group(1))
+        p = re.search(r"peak ([0-9.]+) ms", m.group(2))
+        r["lead_peak"] = float(p.group(1)) if p else r["lead_end"]
+        r["lead_fixed"] = "lead-adapt off" in m.group(2)
+    m = re.search(r"generation GPU time p50 ([0-9.]+) ms, p99 ([0-9.]+) ms", text)
+    if m:
+        r["d_p50"], r["d_p99"] = float(m.group(1)), float(m.group(2))
+    r["by_quality"] = {}
+    for m in re.finditer(r"^\s*at (Low|Medium|High)\s+real frames shown ([0-9.]+) ms.*?d p50 ([0-9.]+) ms, "
+                         r"p99 ([0-9.]+) ms over (\d+)", text, re.M):
+        r["by_quality"][QUALITY_FROM_FMP[m.group(1)]] = {
+            "latency": float(m.group(2)), "p50": float(m.group(3)), "p99": float(m.group(4)), "n": int(m.group(5))}
+    interval = num(r"unique-frame intervals p50 ([0-9.]+)")
+    if interval:
+        r["game_fps"] = 1000.0 / interval
+    m = re.search(r"display ([0-9.]+) Hz.*?multiplier cap (\d+), effective (\d+)", text)
+    if m:
+        r["display_hz"], r["m_cap"], r["m_eff"] = float(m.group(1)), int(m.group(2)), int(m.group(3))
+    verdicts = re.findall(r"^\s*verdict\s+(PASS|FAIL)\b", text, re.M)
+    r["verdict"] = verdicts[-1] if verdicts else None
+    return r
+
+
+def fg_share(r):
+    """A parte dos quadros gerados que o multiplicador pedia (1,0: a geração ficou ligada o tempo todo)."""
+    want = r.get("real", 0) * max(1, (r.get("m_cap") or 2) - 1)
+    return min(1.0, r.get("generated", 0) / want) if want else None
+
+
+def load_history():
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return [s for s in data if isinstance(s, dict) and "latency" in s]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_history(hist):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = HISTORY_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(hist[-HISTORY_MAX:], f, indent=1, ensure_ascii=False)
+    os.replace(tmp, HISTORY_FILE)
+
+
+def measures_from(hist):
+    """O que o histórico ensina para as contas: o VFG por resolução e qualidade e a cópia por MB."""
+    out = {"vfg": {}, "ms_per_mb": None, "last": hist[-1] if hist else None}
+    for s in hist:
+        h = s.get("height")
+        for q, st in (s.get("by_quality") or {}).items():
+            if h and st.get("n", 0) >= 30:
+                out["vfg"].setdefault(str(res_key(h)), {})[q] = st["p99"]
+        if s.get("upload") and s.get("frame_bytes"):
+            out["ms_per_mb"] = s["upload"] / (s["frame_bytes"] / 1e6)
+    return out
+
+
+# --------------------------------------------------------------------------
+# PCIe da placa de vídeo (leitura sem root; a correção pede senha pelo pkexec)
+# --------------------------------------------------------------------------
+
+PCI_DIR = "/sys/bus/pci/devices"
+BDF_RE = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$")
+PCIE_GEN = {2.5: 1, 5.0: 2, 8.0: 3, 16.0: 4, 32.0: 5, 64.0: 6}
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def gts(text):
+    m = re.match(r"([0-9.]+)\s*GT/s", text or "")
+    return float(m.group(1)) if m else None
+
+
+def gen_label(speed):
+    if not speed:
+        return "?"
+    n = PCIE_GEN.get(speed)
+    return f"{fmt_num(speed)} GT/s (Gen{n})" if n else f"{fmt_num(speed)} GT/s"
+
+
+def gpu_link():
+    """A placa de vídeo (NVIDIA de preferência), a porta PCIe acima dela, o resfriador de PCIe do kernel dessa porta
+    (bwctrl: o estado 0 é a velocidade máxima) e as velocidades do link."""
+    best = None
+    try:
+        names = os.listdir(PCI_DIR)
+    except OSError:
+        return None
+    for bdf in names:
+        if not read_text(f"{PCI_DIR}/{bdf}/class").startswith("0x03"):
+            continue
+        width = read_text(f"{PCI_DIR}/{bdf}/max_link_width")
+        key = (read_text(f"{PCI_DIR}/{bdf}/vendor") == "0x10de", int(width) if width.isdigit() else 0)
+        if best is None or key > best[0]:
+            best = (key, bdf)
+    if not best:
+        return None
+    bdf = best[1]
+    port = os.path.basename(os.path.dirname(os.path.realpath(f"{PCI_DIR}/{bdf}")))
+    if not BDF_RE.match(port):
+        port = None
+    cdev = None
+    if port:
+        base = "/sys/class/thermal"
+        try:
+            for n in sorted(os.listdir(base)):
+                if re.fullmatch(r"cooling_device\d+", n) and read_text(f"{base}/{n}/type") == f"PCIe_Port_Link_Speed_{port}":
+                    cdev = f"{base}/{n}"
+        except OSError:
+            pass
+    return {
+        "gpu": bdf, "port": port, "cdev": cdev,
+        "now": gts(read_text(f"{PCI_DIR}/{bdf}/current_link_speed")),
+        "max": gts(read_text(f"{PCI_DIR}/{bdf}/max_link_speed")),
+        "port_max": gts(read_text(f"{PCI_DIR}/{port}/max_link_speed")) if port else None,
+        "width": read_text(f"{PCI_DIR}/{bdf}/current_link_width"),
+    }
+
+
+def gpu_name(bdf):
+    try:
+        r = subprocess.run(["lspci", "-s", bdf], capture_output=True, text=True, timeout=5)
+        line = r.stdout.strip().splitlines()[0]
+        return line.split(": ", 1)[1].split(" (rev")[0] if ": " in line else line
+    except (OSError, IndexError, subprocess.SubprocessError):
+        return bdf
 
 
 # --------------------------------------------------------------------------
@@ -511,6 +896,17 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         self.kill_timers = []
         self.restore_args = None
         self.chip_box = None
+        self.radio_rows = {}
+        self.run_lines = []
+        self.run_eof = self.run_exited = False
+        self.run_config = None
+        self.pcie_timer = 0
+        self.pcie_seen = []
+        self.history = load_history()
+        self.measures = measures_from(self.history)
+        self.link = gpu_link()
+        self.link_name = gpu_name(self.link["gpu"]) if self.link else ""
+        self.est = None
 
         self.devices = capture_devices()
         self.sinks = pactl_nodes("sinks")
@@ -554,7 +950,10 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         self.set_status("idle", "Parado", "")
         self.connect("close-request", self.on_close_request)
         if self.extra.pop("migrated", False):
-            self.toast("Agora as outras telas ficam ligadas no jogo e o VRR fica desligado (ajuste em Tela e ritmo)")
+            self.toast("Agora as outras telas ficam ligadas no jogo e o VRR fica desligado (ajuste em Telas)")
+            self.schedule_save()
+        if self.extra.pop("migrated3", False):
+            self.toast("Nova aba “Geração de quadros”: fluidez, qualidade, ritmo e o atraso de cada sessão")
             self.schedule_save()
         self.install_shortcuts()
 
@@ -688,11 +1087,17 @@ class HypeFrameWindow(Adw.ApplicationWindow):
 
     def build_pages(self):
         self.add_page("inicio", "Início", "media-playback-start-symbolic", self.page_home())
+        self.add_page("geracao", "Geração de quadros", "media-seek-forward-symbolic", self.page_generation())
         self.add_page("imagem", "Imagem e HDR", "color-select-symbolic", self.page_image())
         self.add_page("captura", "Captura", "camera-video-symbolic", self.page_capture())
-        self.add_page("tela", "Tela e ritmo", "video-display-symbolic", self.page_display())
+        self.add_page("tela", "Telas", "video-display-symbolic", self.page_display())
         self.add_page("audio", "Áudio", "audio-speakers-symbolic", self.page_audio())
         self.add_page("sistema", "Sistema", "emblem-system-symbolic", self.page_system())
+
+    def go_page(self, name):
+        for i, (n, *_r) in enumerate(self.pages):
+            if n == name:
+                self.nav.select_row(self.nav.get_row_at_index(i))
 
     def page_home(self):
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -737,20 +1142,24 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         col.append(prof)
 
         ess = Adw.PreferencesGroup(title="Essencial")
-        ess.add(self.combo("mode", "Modo de captura", [(m, l) for m, l, _f in MODES],
+        ess.add(self.combo("mode", "Modo de captura", [(m[0], m[1]) for m in MODES],
                            "O que a Elgato entrega; o fmp gera os quadros do meio"))
-        ess.add(self.toggles("quality", "Qualidade do VFG",
-                             [("low", "Baixa"), ("medium", "Média"), ("high", "Alta")],
-                             "Média: ~2 ms por quadro em 4K. Q troca durante o jogo"))
-        ess.add(self.spin("multiplier", "Multiplicador", 1, 8, 1, 0,
-                          "Quadros na tela por quadro capturado"))
-        ess.add(self.optional_spin("output_hz", "Taxa de saída (Hz)", 24, 360, 0.01, 2,
-                                   "Ligada: substitui o multiplicador (o teto vira esta taxa)"))
+        self.home_fg = Adw.ActionRow(title="Geração de quadros", activatable=True)
+        img = Gtk.Image.new_from_icon_name("media-seek-forward-symbolic")
+        img.add_css_class("profile-icon")
+        self.home_fg.add_prefix(img)
+        self.home_fg.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        self.home_fg.connect("activated", lambda *_: self.go_page("geracao"))
+        ess.add(self.home_fg)
+        self.home_last = Adw.ActionRow(title="Última sessão", activatable=True)
+        img = Gtk.Image.new_from_icon_name("document-open-recent-symbolic")
+        img.add_css_class("profile-icon")
+        self.home_last.add_prefix(img)
+        self.home_last.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        self.home_last.connect("activated", lambda *_: self.go_page("geracao"))
+        ess.add(self.home_last)
         ess.add(self.switch("fullscreen", "Tela cheia",
-                            "Abre no monitor onde está o mouse"))
-        ess.add(self.toggles("clock", "Relógio da tela",
-                             [("auto", "Auto"), ("fixed", "Fixo"), ("vrr", "VRR")],
-                             "VRR só vale com a TV em VRR e taxa múltipla exata"))
+                            "Abre na tela do jogo escolhida em Telas"))
         col.append(ess)
 
         logg = Adw.PreferencesGroup(title="Saída do fmp")
@@ -780,22 +1189,179 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         self.log("Pronto. Ajuste os controles e clique em Iniciar (Ctrl+Enter).")
         return sw
 
-    def page_image(self):
+    def radios(self, key, options, group):
+        """Uma linha por opção, com botão de rádio: o título e a explicação de cada escolha ficam à vista."""
+        rows = {}
+        first = None
+        for value, title, subtitle in options:
+            row = Adw.ActionRow(title=title, subtitle=subtitle or "", activatable=True)
+            chk = Gtk.CheckButton(valign=Gtk.Align.CENTER)
+            if first is None:
+                first = chk
+            else:
+                chk.set_group(first)
+            row.add_prefix(chk)
+            row.set_activatable_widget(chk)
+            chk.set_active(self.values[key] == value)
+            chk.connect("toggled", lambda c, val=value: c.get_active() and self.changed(key, val))
+            group.add(row)
+            rows[value] = (row, chk)
+        if self.values[key] not in rows:
+            self.values[key] = options[0][0]
+            rows[options[0][0]][1].set_active(True)
+
+        def setv(val):
+            if val in rows:
+                rows[val][1].set_active(True)
+        self.setters[key] = setv
+        self.radio_rows[key] = rows
+        return rows
+
+    def page_generation(self):
         page = Adw.PreferencesPage()
-        gen = Adw.PreferencesGroup(title="Gerador de quadros")
-        gen.add(self.combo("generator", "Gerador", [
+
+        # Resumo: o que sai na tela, o atraso estimado e de onde ele vem, e o último medido.
+        top = Adw.PreferencesGroup()
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        hero.add_css_class("hero")
+        head = Gtk.Box(spacing=18)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, hexpand=True)
+        self.fg_rate = Gtk.Label(xalign=0)
+        self.fg_rate.add_css_class("fg-rate")
+        left.append(self.fg_rate)
+        self.fg_sub = Gtk.Label(xalign=0, wrap=True)
+        self.fg_sub.add_css_class("fg-caption")
+        left.append(self.fg_sub)
+        head.append(left)
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+        cap = Gtk.Label(label="Atraso estimado", xalign=1)
+        cap.add_css_class("fg-caption")
+        right.append(cap)
+        self.fg_total = Gtk.Label(xalign=1)
+        self.fg_total.add_css_class("fg-total")
+        right.append(self.fg_total)
+        self.fg_total_sub = Gtk.Label(xalign=1)
+        self.fg_total_sub.add_css_class("fg-note")
+        right.append(self.fg_total_sub)
+        head.append(right)
+        hero.append(head)
+        self.fg_bar = Gtk.DrawingArea(content_height=16, hexpand=True)
+        self.fg_bar.set_draw_func(self.draw_bar)
+        hero.append(self.fg_bar)
+        self.fg_legend = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
+                                     min_children_per_line=2, column_spacing=14, row_spacing=4,
+                                     homogeneous=False)
+        hero.append(self.fg_legend)
+        self.fg_warn = Gtk.Label(xalign=0, wrap=True)
+        self.fg_warn.add_css_class("bad")
+        hero.append(self.fg_warn)
+        self.fg_last = Gtk.Label(xalign=0, wrap=True)
+        self.fg_last.add_css_class("fg-caption")
+        hero.append(self.fg_last)
+        self.fg_notes = Gtk.Label(xalign=0, wrap=True)
+        self.fg_notes.add_css_class("fg-note")
+        hero.append(self.fg_notes)
+        top.add(hero)
+        page.add(top)
+
+        game = Adw.PreferencesGroup(title="Seu jogo")
+        game.add(self.toggles("game_fps", "Taxa do jogo (fps)", [("30", "30"), ("60", "60")],
+                              "O fmp detecta sozinho; isto escolhe quantos quadros gerar"))
+        keys = Adw.ActionRow(title="Durante o jogo",
+                             subtitle="Q troca a qualidade · H troca SDR e HDR10 · A volta a seguir o console · Esc sai")
+        keys.add_css_class("property")
+        game.add(keys)
+        page.add(game)
+
+        rate = Adw.PreferencesGroup(
+            title="Quadros na tela",
+            description="Cada quadro gerado fica entre dois do jogo. Para criá-lo, o fmp espera o quadro seguinte "
+                        "chegar: é a espera da interpolação, o preço fixo da geração")
+        self.radios("fg_target", [
+            ("60", "60 fps · menor atraso", ""),
+            ("120", "120 fps · mais fluido", ""),
+            ("custom", "Personalizado", "Multiplicador ou taxa de saída escolhidos à mão"),
+        ], rate)
+        rate.add(self.spin("multiplier", "Multiplicador", 1, 8, 1, 0,
+                           "Teto de quadros na tela por quadro do jogo"))
+        rate.add(self.optional_spin("output_hz", "Taxa de saída (Hz)", 24, 360, 0.01, 2,
+                                    "Ligada: substitui o multiplicador (o teto vira esta taxa sobre a da captura)"))
+        page.add(rate)
+
+        self.quality_group = Adw.PreferencesGroup(
+            title="Qualidade dos quadros gerados",
+            description="O tempo de cada quadro gerado entra no atraso. Se passar do limite, o fmp desliga a geração")
+        self.radios("quality", [
+            ("medium", "Média · recomendada", ""),
+            ("high", "Alta · menos artefatos", ""),
+            ("low", "Baixa · mais leve", ""),
+        ], self.quality_group)
+        self.quality_group.add(self.switch("quality_switch", "Trocar a qualidade com Q durante o jogo",
+                                           "Carrega as duas qualidades no início (+1,5 GB de memória de vídeo em 4K)"))
+        page.add(self.quality_group)
+
+        rhythm = Adw.PreferencesGroup(
+            title="Prioridade do ritmo",
+            description="O GNOME precisa de cada quadro uns 5 ms antes do refresh. Quando um chega tarde, o fmp passa "
+                        "a entregar mais cedo (a antecedência), e todo quadro espera mais")
+        self.radios("lead_policy", LEAD_POLICIES, rhythm)
+        rhythm.add(self.spin("lead_max", "Teto do Equilíbrio (ms)", 1, 20, 0.5, 1,
+                             "Até onde a antecedência pode subir em “Equilíbrio”"))
+        rhythm.add(self.optional_spin("lead", "Antecedência inicial (ms)", 0, 20, 0.5, 1,
+                                      "Desligado: o fmp mede o GNOME antes de começar (“Menor atraso” usa este valor)"))
+        page.add(rhythm)
+
+        cuts = Adw.PreferencesGroup(title="Cortes de cena")
+        cuts.add(self.toggles("scd", "Cena que muda de repente",
+                              [("off", "Interpolar"), ("on", "Detectar")],
+                              "Detectar confunde movimento rápido com corte"))
+        page.add(cuts)
+
+        adv = Adw.PreferencesGroup()
+        exp = Adw.ExpanderRow(title="Opções avançadas",
+                              subtitle="Gerador, relógio da tela, latch, VRR e CUDA")
+        exp.add_row(self.combo("generator", "Gerador", [
             ("auto", "Automático (VFG se o SDK existir)"), ("vfg", "NVIDIA VFG"),
-            ("blend", "Mistura simples"), ("repeat", "Repetir quadro"), ("none", "Nenhum (só reais)")]))
-        gen.add(self.switch("quality_switch", "Carregar as duas qualidades",
-                            "Permite trocar com Q sem pausa; custa ~1,5 GB de VRAM em 4K"))
-        gen.add(self.toggles("scd", "Detecção de corte de cena",
-                             [("off", "Desligada"), ("on", "Ligada")],
-                             "Ligada, movimento rápido vira quadro real e cai para 30 fps"))
-        gen.add(self.combo("cuda_sync", "Espera do CUDA", [
+            ("blend", "Mistura simples"), ("repeat", "Repetir quadro"), ("none", "Nenhum (só reais, sem geração)")]))
+        exp.add_row(self.toggles("clock", "Relógio da tela",
+                                 [("auto", "Auto"), ("fixed", "Fixo"), ("vrr", "VRR")],
+                                 "VRR: entrega na hora. Sem VRR de verdade na tela, só vale com taxa múltipla exata"))
+        exp.add_row(self.optional_spin("latch", "Latch mínimo (ms)", 0, 20, 0.5, 1,
+                                       "Desligado: 1 ms (padrão do fmp)"))
+        exp.add_row(self.spin("late_generated", "Quadro gerado atrasado (ms)", 0, 8, 0.5, 1,
+                              "VRR: mostra um gerado até este atraso em vez de pular"))
+        exp.add_row(self.switch("ceiling", "Ritmo no teto do VRR",
+                                "Pula um gerado quando a tela fica para trás no limite da taxa"))
+        exp.add_row(self.combo("cuda_sync", "Espera do CUDA", [
             ("auto", "Automático (bloqueante)"), ("blocking", "Bloqueante (menos CPU)"),
             ("spin", "Ativa (spin)"), ("yield", "Yield")]))
-        page.add(gen)
+        adv.add(exp)
+        page.add(adv)
 
+        self.last_group = Adw.PreferencesGroup(
+            title="Última sessão",
+            description="Medido pelo fmp ao parar (Esc ou Parar). Compare antes e depois de mudar uma opção")
+        self.last_rows = {}
+        for k, title in (("latency", "Atraso medido"), ("gen", "Geração de quadros"), ("missed", "Fora do ritmo"),
+                         ("copy", "Cópia para a GPU"), ("lead", "Antecedência"), ("game", "Jogo detectado")):
+            row = Adw.ActionRow(title=title)
+            row.add_css_class("property")
+            self.last_group.add(row)
+            self.last_rows[k] = row
+        self.hist_exp = Adw.ExpanderRow(title="Sessões anteriores")
+        self.hist_rows = []
+        self.last_group.add(self.hist_exp)
+        clear = Gtk.Button(icon_name="edit-clear-all-symbolic", tooltip_text="Limpar o histórico",
+                           valign=Gtk.Align.CENTER)
+        clear.add_css_class("flat")
+        clear.connect("clicked", self.on_clear_history)
+        self.last_group.set_header_suffix(clear)
+        page.add(self.last_group)
+        self.show_history()
+        return page
+
+    def page_image(self):
+        page = Adw.PreferencesPage()
         hdr = Adw.PreferencesGroup(title="HDR e cor",
                                    description="A Elgato não manda metadados HDR; o fmp manda estes para a TV")
         hdr.add(self.combo("hdr", "HDR", [
@@ -894,18 +1460,10 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         page.add(self.restore_group)
         self.build_others()
 
-        rit = Adw.PreferencesGroup(title="Ritmo de apresentação",
-                                   description="Nos testes no GNOME, 5,5 ms fixos baixaram os quadros fora do ritmo de 17% para 1,5% com dois monitores")
-        rit.add(self.optional_spin("lead", "Antecedência fixa (ms)", 0, 20, 0.5, 1,
-                                   "Desligado: o fmp mede e adapta"))
-        rit.add(self.optional_spin("latch", "Latch mínimo (ms)", 0, 20, 0.5, 1,
-                                   "Desligado: 1 ms (padrão do fmp)"))
-        rit.add(self.spin("late_generated", "Quadro gerado atrasado (ms)", 0, 16, 0.5, 1,
-                          "VRR: mostra um gerado até este atraso em vez de pular"))
-        rit.add(self.switch("ceiling", "Ritmo no teto do VRR",
-                            "Pula um gerado quando a tela fica para trás no limite da taxa"))
-        rit.add(self.entry("window", "Tamanho da janela (LxA)", size=True))
-        page.add(rit)
+        win = Adw.PreferencesGroup(title="Janela",
+                                   description="O ritmo dos quadros (antecedência, latch, VRR) fica em Geração de quadros")
+        win.add(self.entry("window", "Tamanho da janela fora da tela cheia (LxA)", size=True))
+        page.add(win)
         return page
 
     def build_others(self):
@@ -983,6 +1541,29 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         g.add(self.entry("fmp_path", "Binário do fmp"))
         g.add(self.entry("sdk", "VFX SDK (visto de dentro da distrobox)"))
         page.add(g)
+
+        pg = Adw.PreferencesGroup(
+            title="PCIe da placa de vídeo",
+            description="Cada quadro capturado vai da memória para a placa de vídeo pelo PCIe. Em Gen1 isso leva cerca "
+                        "de 14 ms em 4K HDR; em Gen4, cerca de 1 ms")
+        self.pcie_card = Adw.ActionRow(title="Placa")
+        self.pcie_card.add_css_class("property")
+        pg.add(self.pcie_card)
+        self.pcie_now = Adw.ActionRow(title="Link agora")
+        self.pcie_now.add_css_class("property")
+        ref = Gtk.Button(icon_name="view-refresh-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Ler de novo")
+        ref.add_css_class("flat")
+        ref.connect("clicked", lambda *_: self.reload_link())
+        self.pcie_now.add_suffix(ref)
+        pg.add(self.pcie_now)
+        self.pcie_game = Adw.ActionRow(title="No último jogo")
+        self.pcie_game.add_css_class("property")
+        pg.add(self.pcie_game)
+        self.pcie_fix = Adw.ButtonRow(title="Liberar a velocidade máxima do PCIe (pede senha)",
+                                      start_icon_name="emblem-synchronizing-symbolic")
+        self.pcie_fix.connect("activated", self.on_pcie_fix)
+        pg.add(self.pcie_fix)
+        page.add(pg)
 
         d = Adw.PreferencesGroup(title="Diagnóstico")
         d.add(self.optional_spin("duration", "Parar depois de (s)", 5, 3600, 5, 0,
@@ -1127,8 +1708,15 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.rows["capture_fps"].set_sensitive(not custom and v["mode"] != "auto")
         if "window" in self.rows:
             self.rows["window"].set_sensitive(not v["fullscreen"])
+        custom_rate = v["fg_target"] == "custom"
         if "multiplier" in self.rows:
-            self.rows["multiplier"].set_sensitive(not v["output_hz_on"])
+            self.rows["multiplier"].set_sensitive(custom_rate and not v["output_hz_on"])
+        if "output_hz_on" in self.rows:
+            self.rows["output_hz_on"].set_sensitive(custom_rate)
+        if "lead_max" in self.rows:
+            self.rows["lead_max"].set_sensitive(v["lead_policy"] == "balanced")
+        if hasattr(self, "quality_group"):
+            self.quality_group.set_sensitive(v["generator"] in ("auto", "vfg"))
         for k in ("tv_color", "tv_vrr"):
             if k in self.rows:
                 self.rows[k].set_sensitive(v["tv_apply"])
@@ -1137,17 +1725,366 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         for k in ("peak", "maxcll_on", "maxfall", "range", "matrix"):
             if k in self.rows:
                 self.rows[k].set_sensitive(v["hdr"] != "off" or k in ("range", "matrix"))
-        if "quality" in self.rows:
-            gen_vfg = v["generator"] in ("auto", "vfg")
-            self.rows["quality"].set_sensitive(gen_vfg)
-            self.rows["quality_switch"].set_sensitive(gen_vfg)
+        self.update_generation()
         if hasattr(self, "cmd_label"):
             self.cmd_label.set_text(shlex.join(self.build_argv("capture")))
         self.update_chips()
+        self.update_pcie()
         if hasattr(self, "tv_now"):
             self.tv_now.set_subtitle(describe_tv(self.display, v["tv_connector"]))
         if hasattr(self, "banner"):
             self.update_banner()
+
+    # ---------------------------------------------------------------- geração de quadros
+
+    def update_generation(self):
+        """Recalcula a conta do atraso e reescreve o resumo, as explicações de cada opção e a linha do Início."""
+        v = self.values
+        hz = screen_hz(self.display, v["tv_connector"])
+        est = estimate(v, hz, self.measures)
+        self.est = est
+        if not hasattr(self, "fg_rate"):
+            return
+        game = est["game"]
+        gen_name = {"auto": "VFG", "vfg": "VFG", "blend": "Mistura", "repeat": "Repetição",
+                    "none": "sem gerador"}[v["generator"]]
+        if gen_name == "VFG":
+            gen_name += " " + QUALITY_NAMES[v["quality"]]
+        policy = {p: t for p, t, _s in LEAD_POLICIES}[v["lead_policy"]]
+        if est["gen"]:
+            n = est["mult"] - 1
+            rate = f"{round(game)} → {round(game * est['mult'])} fps"
+            what = f"{n} quadro{'s' if n > 1 else ''} gerado{'s' if n > 1 else ''} por quadro do jogo"
+        else:
+            rate = f"{round(game)} fps, sem geração"
+            what = "a geração não vai ligar" if est["wants"] else "nada a gerar com esta escolha"
+        self.fg_rate.set_label(rate)
+        self.fg_sub.set_label(f"{what} · {gen_name} · ritmo: {policy}")
+        self.fg_total.set_label(f"≈ {fmt_ms(est['total'])} ms")
+        self.fg_total_sub.set_label("da captura à tela" + ("" if est["copy_measured"] else " (cópia estimada)"))
+        self.fg_bar.queue_draw()
+        while (c := self.fg_legend.get_first_child()) is not None:
+            self.fg_legend.remove(c)
+        for label, ms, kind in est["parts"]:
+            item = Gtk.Box(spacing=6)
+            dot = Gtk.Box(valign=Gtk.Align.CENTER)
+            dot.add_css_class("legend-dot")
+            dot.add_css_class(kind)
+            item.append(dot)
+            lab = Gtk.Label(label=f"{label} {fmt_ms(ms)}")
+            lab.add_css_class("legend")
+            item.append(lab)
+            self.fg_legend.append(item)
+        self.fg_warn.set_label("\n".join(est["warns"]))
+        self.fg_warn.set_visible(bool(est["warns"]))
+        self.fg_notes.set_label("\n".join(est["notes"]))
+        last = self.history[-1] if self.history else None
+        self.fg_last.set_label(self.session_line(last, long=True) if last else
+                               "Ainda sem sessão medida: rode e pare com Esc ou Parar para ver o atraso real")
+
+        # As explicações de cada escolha, com o custo em ms.
+        t_ms = est["t"]
+        g = round(GAME_RATES.get(v["game_fps"], 29.97))
+        for target, (row, _chk) in self.radio_rows.get("fg_target", {}).items():
+            if target == "custom":
+                continue
+            m = max(1, round(int(target) / g))
+            if m < 2:
+                sub = f"O jogo já está a {g}: sem quadros gerados"
+            else:
+                hold = (m - 1) / m * t_ms
+                sub = (f"{m - 1} gerado{'s' if m > 2 else ''} por quadro do jogo · espera de {fmt_ms(hold)} ms")
+                if target == "120" and g == 30:
+                    sub += f" (+{fmt_ms(hold - t_ms / 2)} ms em relação a 60)"
+                if hz and int(target) > hz * 1.01:
+                    sub += f" · a tela do jogo está a {fmt_num(hz)} Hz"
+            row.set_subtitle(sub)
+        budget = t_ms / est["mult"] if est["mult"] >= 2 else t_ms / 2
+        res = res_key(est["height"])
+        rlab = res_label(est["height"])
+        for q, (row, _chk) in self.radio_rows.get("quality", {}).items():
+            d = vfg_p99(self.measures, est["height"], q)
+            local = self.measures.get("vfg", {}).get(str(res), {}).get(q) is not None
+            if d is None:
+                sub = (f"Não medida em {rlab}. Mais artefatos; deve ganhar menos de 1 ms" if q == "low"
+                       else f"Não medida em {rlab} ainda")
+            else:
+                src = "medido aqui" if local else "medido numa RTX 4080 Super"
+                sub = f"≈ {fmt_ms(d)} ms por quadro gerado em {rlab} ({src})"
+                if d > budget:
+                    sub += f" · passa do limite de {fmt_ms(budget)} ms: a geração desliga"
+                elif q == "high":
+                    sub += f" · cabe, mas soma {fmt_ms(d - (vfg_p99(self.measures, est['height'], 'medium') or 2.0))} ms ao atraso"
+            row.set_subtitle(sub)
+        base = lead_estimate(dict(v, lead_policy="smooth"), hz or 60.0, self.measures.get("last"))[0]
+        for p, (row, _chk) in self.radio_rows.get("lead_policy", {}).items():
+            lead, txt = lead_estimate(dict(v, lead_policy=p), hz or 60.0, self.measures.get("last"))
+            desc = {k: s for k, _t, s in LEAD_POLICIES}[p]
+            delta = f" · ≈ −{fmt_ms(base - lead)} ms em relação a “Mais liso”" if p != "smooth" and lead < base else ""
+            row.set_subtitle(f"Antecedência {txt}{delta}. {desc}")
+        if "game_fps" in self.rows:
+            seen = last.get("game_fps") if last else None
+            self.rows["game_fps"].set_subtitle("O fmp detecta sozinho; isto escolhe quantos quadros gerar"
+                                               + (f". Último jogo: {fmt_num(seen)} fps" if seen else ""))
+        if hasattr(self, "home_fg"):
+            self.home_fg.set_subtitle(f"{rate} · {gen_name} · ritmo: {policy} · ≈ {fmt_ms(est['total'])} ms estimados")
+            self.home_last.set_subtitle(self.session_line(last) if last else "Nenhuma ainda")
+
+    def draw_bar(self, _area, cr, width, height):
+        est = self.est
+        if not est or width <= 0 or not est["parts"]:
+            return
+        total = est["total"] or 1.0
+        x = 0.0
+        n = len(est["parts"])
+        for i, (_label, ms, kind) in enumerate(est["parts"]):
+            w = width * ms / total
+            cr.set_source_rgb(*PART_COLORS[kind])
+            cr.rectangle(x, 0, max(1.0, w - (2 if i < n - 1 else 0)), height)
+            cr.fill()
+            x += w
+
+    def session_line(self, s, long=False):
+        """Uma linha com o principal de uma sessão medida."""
+        try:
+            when = time.strftime("%d/%m %H:%M", time.strptime(s.get("date", ""), "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            when = s.get("date", "?")
+        parts = [f"{fmt_ms(s['latency'])} ms medidos" + (f" (p99 {fmt_ms(s.get('latency_p99'))})" if long else "")]
+        share = fg_share(s)
+        if share is not None:
+            parts.append(f"geração {round(share * 100)}%")
+        if s.get("missed") is not None and s.get("slots"):
+            parts.append(f"{fmt_num(round(100 * s['missed'] / s['slots'], 1))}% fora do ritmo")
+        head = f"Última sessão ({when}): " if long else f"{when} · "
+        return head + " · ".join(parts)
+
+    def show_history(self):
+        """A última sessão em detalhe e as anteriores numa lista, para comparar."""
+        if not hasattr(self, "last_rows"):
+            return
+        rows = self.last_rows
+        last = self.history[-1] if self.history else None
+        if not last:
+            for row in rows.values():
+                row.set_subtitle("—")
+            rows["latency"].set_subtitle("Nenhuma sessão medida ainda: rode e pare com Esc ou Parar")
+        else:
+            prev = self.history[-2] if len(self.history) > 1 else None
+            delta = ""
+            if prev:
+                d = last["latency"] - prev["latency"]
+                delta = f" · {'+' if d >= 0 else '−'}{fmt_ms(abs(d))} ms em relação à anterior"
+            rows["latency"].set_subtitle(f"{fmt_ms(last['latency'])} ms da captura à tela (p99 "
+                                         f"{fmt_ms(last.get('latency_p99'))}){delta}")
+            share = fg_share(last)
+            if share is None:
+                rows["gen"].set_subtitle("—")
+            else:
+                txt = f"ligada {round(share * 100)}% do tempo ({last.get('generated', 0)} gerados, {last.get('real', 0)} reais)"
+                if share < 0.8:
+                    txt += ": a qualidade não coube ou o multiplicador caiu"
+                rows["gen"].set_subtitle(txt)
+            if last.get("missed") is not None and last.get("slots"):
+                rows["missed"].set_subtitle(f"{fmt_num(round(100 * last['missed'] / last['slots'], 1))}% dos refreshes "
+                                            f"({int(last['missed'])} de {last['slots']})")
+            else:
+                rows["missed"].set_subtitle("—")
+            up = last.get("upload")
+            pc = last.get("pcie_max")
+            copy = f"{fmt_ms(up)} ms por quadro" if up else "—"
+            if pc:
+                copy += f" · PCIe chegou a {gen_label(pc)}"
+                if pc <= 2.5 and (last.get("pcie_cap") or 0) > 2.5:
+                    copy += " (preso: veja Sistema)"
+            rows["copy"].set_subtitle(copy)
+            if last.get("lead_end") is not None:
+                lt = f"terminou em {fmt_ms(last['lead_end'])} ms"
+                if last.get("lead_fixed"):
+                    lt += " (fixa)"
+                elif last.get("lead_peak") and last["lead_peak"] > last["lead_end"] + 0.05:
+                    lt += f", pico de {fmt_ms(last['lead_peak'])} ms"
+                rows["lead"].set_subtitle(lt)
+            else:
+                rows["lead"].set_subtitle("—")
+            rows["game"].set_subtitle(f"{fmt_num(last['game_fps'])} fps" if last.get("game_fps") else "—")
+        for row in self.hist_rows:
+            self.hist_exp.remove(row)
+        self.hist_rows = []
+        older = list(reversed(self.history[:-1]))[:15]
+        self.hist_exp.set_subtitle(f"{len(self.history)} no histórico" if self.history else "Nenhuma")
+        for s in older:
+            conf = [s.get("mode", "?"), QUALITY_NAMES.get(s.get("quality"), "?"),
+                    f"{s.get('fg_target', '?')} fps" if s.get("fg_target") not in (None, "custom") else "taxa à mão",
+                    "ritmo " + {p: t for p, t, _s in LEAD_POLICIES}.get(s.get("lead_policy"), "?")]
+            row = Adw.ActionRow(title=self.session_line(s), subtitle=" · ".join(conf))
+            self.hist_exp.add_row(row)
+            self.hist_rows.append(row)
+
+    def on_clear_history(self, *_):
+        d = Adw.AlertDialog(heading="Limpar o histórico de sessões?",
+                            body="As medições guardadas somem. As contas voltam aos números da RTX 4080 Super.")
+        d.add_response("cancel", "Cancelar")
+        d.add_response("ok", "Limpar")
+        d.set_response_appearance("ok", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def resp(_d, r):
+            if r == "ok":
+                self.history = []
+                try:
+                    save_history(self.history)
+                except OSError as e:
+                    self.toast(f"Não consegui limpar: {e}")
+                self.measures = measures_from(self.history)
+                self.show_history()
+                self.refresh_all()
+        d.connect("response", resp)
+        d.present(self)
+
+    def session_config(self):
+        """O que foi escolhido para a sessão, para o histórico."""
+        v = self.values
+        cap_fps, _s, _f = mode_spec(v)
+        return {
+            "date": time.strftime("%Y-%m-%dT%H:%M:%S"), "mode": v["mode"], "quality": v["quality"],
+            "fg_target": v["fg_target"], "game_fps_choice": v["game_fps"], "mult": fg_multiplier(v, cap_fps),
+            "generator": v["generator"], "lead_policy": v["lead_policy"], "lead_on": v["lead_on"],
+            "lead": v["lead"], "lead_max": v["lead_max"], "clock": v["clock"], "tv_color": v["tv_color"],
+            "tv_apply": v["tv_apply"], "others_on": len(self.others_on_during_game()),
+            "estimate": round(self.est["total"], 1) if self.est else None,
+        }
+
+    def sample_pcie(self):
+        if not self.link or not self.proc:
+            self.pcie_timer = 0
+            return False
+        s = gts(read_text(f"{PCI_DIR}/{self.link['gpu']}/current_link_speed"))
+        if s:
+            self.pcie_seen.append(s)
+        return True
+
+    def maybe_collect(self):
+        """Quando o fmp saiu e a saída acabou: lê o resumo, guarda no histórico e mostra."""
+        if self.run_config is None or not (self.run_eof and self.run_exited):
+            return
+        cfg, self.run_config = self.run_config, None
+        res = parse_summary("\n".join(self.run_lines))
+        self.run_lines = []
+        if not res:
+            return
+        res.update(cfg)
+        if self.pcie_seen:
+            res["pcie_max"] = max(self.pcie_seen)
+            res["pcie_samples"] = len(self.pcie_seen)
+        if self.link:
+            res["pcie_cap"] = self.link["max"]
+        self.history.append(res)
+        try:
+            save_history(self.history)
+        except OSError as e:
+            self.toast(f"Não consegui guardar a sessão: {e}")
+        self.measures = measures_from(self.history)
+        self.show_history()
+        self.refresh_all()
+        share = fg_share(res)
+        msg = f"Atraso medido: {fmt_ms(res['latency'])} ms"
+        if share is not None and share < 0.8:
+            msg += f"; a geração ficou ligada só {round(share * 100)}% do tempo"
+        self.toast(msg)
+
+    # ---------------------------------------------------------------- PCIe
+
+    def reload_link(self):
+        self.link = gpu_link()
+        if self.link and not self.link_name:
+            self.link_name = gpu_name(self.link["gpu"])
+        self.update_pcie()
+
+    def update_pcie(self):
+        if not hasattr(self, "pcie_card"):
+            return
+        link = self.link
+        if not link:
+            self.pcie_card.set_subtitle("Nenhuma placa de vídeo PCIe encontrada")
+            self.pcie_now.set_subtitle("—")
+            self.pcie_game.set_subtitle("—")
+            self.pcie_fix.set_sensitive(False)
+            return
+        self.pcie_card.set_subtitle(f"{self.link_name} ({link['gpu']}, porta {link['port'] or '?'})")
+        self.pcie_now.set_subtitle(f"{gen_label(link['now'])} de até {gen_label(link['max'])}, x{link['width']}. "
+                                   "Parada, a NVIDIA baixa para Gen1 sozinha: o que conta é durante o jogo")
+        last = next((s for s in reversed(self.history) if s.get("pcie_max")), None)
+        if last:
+            stuck = last["pcie_max"] <= 2.5 and (last.get("pcie_cap") or 0) > 2.5
+            txt = ("ficou em Gen1 o tempo todo" if stuck else f"chegou a {gen_label(last['pcie_max'])}")
+            if last.get("upload"):
+                txt += f"; a cópia levou {fmt_ms(last['upload'])} ms por quadro"
+            if stuck:
+                txt += ". O teto da porta deve estar em Gen1 (veja LATENCIA.md, seção 3.A)"
+            self.pcie_game.set_subtitle(txt)
+        else:
+            self.pcie_game.set_subtitle("Ainda sem medição durante um jogo")
+        fixed = getattr(self, "pcie_fix_result", None)
+        self.pcie_fix.set_sensitive(bool(link.get("cdev")) and not self.proc)
+        if fixed:
+            self.pcie_fix.set_title(f"Liberar a velocidade máxima do PCIe (pede senha) · {fixed}")
+        if not link.get("cdev"):
+            self.pcie_fix.set_title("Liberar a velocidade do PCIe: o kernel não tem o controle desta porta")
+
+    def on_pcie_fix(self, *_):
+        link = self.link or {}
+        cdev, port = link.get("cdev"), link.get("port")
+        if not (cdev and port and re.fullmatch(r"/sys/class/thermal/cooling_device\d+", cdev) and BDF_RE.match(port)):
+            self.toast("O kernel não oferece o controle de velocidade desta porta")
+            return
+        d = Adw.AlertDialog(
+            heading="Liberar a velocidade do PCIe?",
+            body=("O HypeFrame pede ao kernel a velocidade máxima da porta da placa de vídeo (o controle oficial "
+                  f"“{os.path.basename(cdev)}”, estado 0). O kernel retreina o link, então a imagem pode piscar: salve o "
+                  "que estiver aberto e feche o fmp e o OBS.\n\nVale até reiniciar o PC. Depois, rode um jogo e veja a "
+                  "cópia para a GPU na Última sessão."))
+        d.add_response("cancel", "Cancelar")
+        d.add_response("ok", "Liberar (pede senha)")
+        d.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+        d.set_close_response("cancel")
+
+        def resp(_d, r):
+            if r != "ok":
+                return
+            show = f"lspci -vv -s {port} | grep -E 'LnkCtl2|LnkSta:' | tr -s '[:space:]' ' '"
+            script = f"echo antes: $({show}); echo 0 > {cdev}/cur_state; sleep 1; echo depois: $({show})"
+            try:
+                proc = Gio.Subprocess.new(["pkexec", "/bin/sh", "-c", script],
+                                          Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+            except GLib.Error as e:
+                self.alert("Não consegui pedir a senha", e.message)
+                return
+            self.log("[HypeFrame] $ pkexec /bin/sh -c " + shlex.quote(script))
+            proc.communicate_utf8_async(None, None, self.on_pcie_fixed)
+        d.connect("response", resp)
+        d.present(self)
+
+    def on_pcie_fixed(self, proc, res):
+        try:
+            _ok, out, _err = proc.communicate_utf8_finish(res)
+        except GLib.Error as e:
+            out = e.message
+        out = out or ""
+        self.log(out.strip())
+        code = proc.get_exit_status() if proc.get_if_exited() else -1
+        if code in (126, 127):
+            self.toast("Cancelado: nada mudou")
+            return
+        before = re.search(r"antes:.*?Target Link Speed: ([0-9.]+)GT/s", out)
+        after = re.search(r"depois:.*?Target Link Speed: ([0-9.]+)GT/s", out)
+        if after:
+            b = f"{fmt_num(float(before.group(1)))} → " if before else ""
+            self.pcie_fix_result = f"teto da porta: {b}{fmt_num(float(after.group(1)))} GT/s"
+            self.toast(f"PCIe: {self.pcie_fix_result}. Rode um jogo para medir a cópia")
+        else:
+            self.pcie_fix_result = "sem confirmação (veja a saída do fmp)"
+            self.toast("Não consegui confirmar o teto da porta (veja a saída)")
+        self.reload_link()
 
     def update_chips(self):
         if self.chip_box is None:
@@ -1156,20 +2093,18 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.chip_box.remove(c)
         v = self.values
         mode = next((m for m in MODES if m[0] == v["mode"]), None)
-        chips = []
-        if mode and mode[2]:
-            src = float(v["capture_fps"]) if v["capture_fps"] and v["mode"] != "custom" else mode[2]
-            chips.append((f"{mode[1]}", ""))
-            out = v["output_hz"] if v["output_hz_on"] else src * v["multiplier"]
-            chips.append((f"{fmt_num(src)} → {fmt_num(out)} fps", "violet"))
-        else:
-            chips.append((mode[1] if mode else v["mode"], ""))
-            chips.append((f"até {fmt_num(v['output_hz'])} Hz" if v["output_hz_on"]
-                          else f"×{v['multiplier']}", "violet"))
+        chips = [(mode[1] if mode else v["mode"], "")]
+        est = self.est
+        if est and est["gen"]:
+            chips.append((f"{round(est['game'])} → {round(est['game'] * est['mult'])} fps", "violet"))
+        elif est:
+            chips.append(("sem geração" if not est["wants"] else "geração não cabe", "violet"))
         gen = {"auto": "VFG", "vfg": "VFG", "blend": "Mistura", "repeat": "Repetição", "none": "Sem geração"}[v["generator"]]
         if gen == "VFG":
-            gen += " " + {"low": "Baixa", "medium": "Média", "high": "Alta"}[v["quality"]]
+            gen += " " + QUALITY_NAMES[v["quality"]]
         chips.append((gen, ""))
+        if est:
+            chips.append((f"≈ {fmt_ms(est['total'])} ms", "violet"))
         if v["hdr"] != "off":
             chips.append((f"HDR {v['peak']} nits", "violet"))
         if v["tv_apply"]:
@@ -1196,23 +2131,50 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.banner.kind = "restore"
             self.banner.set_revealed(True)
             return
-        if self.others_on_during_game() and not self.values["lead_on"]:
-            self.banner.set_title("Outras telas ligadas: no GNOME o ritmo fica irregular sem antecedência fixa")
+        est = self.est
+        if est and est["wants"] and not est["fits"] and self.values["quality"] != "medium":
+            medium = vfg_p99(self.measures, est["height"], "medium")
+            if medium is None or medium <= est["t"] / est["mult"]:
+                self.banner.set_title(f"A qualidade {QUALITY_NAMES[self.values['quality']]} não cabe aqui: "
+                                      "o fmp desligaria a geração de quadros")
+                self.banner.set_button_label("Usar a Média")
+                self.banner.kind = "quality"
+                self.banner.set_revealed(True)
+                return
+        if self.others_on_during_game() and not self.values["lead_on"] and self.values["lead_policy"] != "low":
+            self.banner.set_title("Outras telas ligadas: no GNOME o ritmo fica irregular sem antecedência inicial fixa")
             self.banner.set_button_label("Usar 5,5 ms")
             self.banner.kind = "lead"
+            self.banner.set_revealed(True)
+            return
+        last = self.history[-1] if self.history else None
+        if (last and not self.proc and last.get("pcie_max") and last["pcie_max"] <= 2.5
+                and (last.get("pcie_cap") or 0) > 2.5):
+            up = f": a cópia levou {fmt_ms(last['upload'])} ms por quadro" if last.get("upload") else ""
+            self.banner.set_title(f"No último jogo o PCIe ficou em Gen1{up}")
+            self.banner.set_button_label("Ver")
+            self.banner.kind = "pcie"
             self.banner.set_revealed(True)
             return
         self.banner.set_revealed(False)
 
     def on_banner(self, _b):
-        if getattr(self.banner, "kind", "") == "restore":
+        kind = getattr(self.banner, "kind", "")
+        if kind == "restore":
             self.restore_display(self.extra.get("pending_restore"))
+        elif kind == "quality":
+            self.set_value("quality", "medium")
+            self.refresh_all()
+            self.schedule_save()
+            self.toast("Qualidade Média: a geração fica ligada")
+        elif kind == "pcie":
+            self.go_page("sistema")
         else:
             self.set_value("lead", 5.5)
             self.set_value("lead_on", True)
             self.refresh_all()
             self.schedule_save()
-            self.toast("Antecedência fixa de 5,5 ms (com dois monitores: de 17% para 1,5% de quadros fora do ritmo)")
+            self.toast("Antecedência inicial de 5,5 ms (com dois monitores: de 17% para 1,5% de quadros fora do ritmo)")
 
     def reload_display(self):
         try:
@@ -1309,10 +2271,10 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         if v["generator"] != "auto":
             a += ["--generator", v["generator"]]
         a += ["--quality", v["quality"]]
-        if v["output_hz_on"]:
+        if v["fg_target"] == "custom" and v["output_hz_on"]:
             a += ["--output-hz", fmt_num(v["output_hz"]).replace(",", ".")]
         else:
-            a += ["--multiplier", str(v["multiplier"])]
+            a += ["--multiplier", str(fg_multiplier(v, mode_spec(v)[0]))]
         a.append("--quality-switch" if v["quality_switch"] else "--no-quality-switch")
         a += ["--scd", v["scd"]]
         if v["cuda_sync"] != "auto":
@@ -1324,8 +2286,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         else:
             a += ["--window", v["window"]]
         a += ["--clock", v["clock"]]
-        if v["lead_on"]:
-            a += ["--present-lead-ms", fmt_num(v["lead"]).replace(",", ".")]
+        a += self.lead_args()
         if v["latch_on"]:
             a += ["--latch-ms", fmt_num(v["latch"]).replace(",", ".")]
         a += ["--late-generated-ms", fmt_num(v["late_generated"]).replace(",", ".")]
@@ -1364,6 +2325,21 @@ class HypeFrameWindow(Adw.ApplicationWindow):
                 pass
         return argv + a
 
+    def lead_args(self):
+        """A prioridade do ritmo em opções do fmp: antecedência fixa, com teto, ou livre para subir."""
+        v = self.values
+
+        def ms(x):
+            return fmt_num(x).replace(",", ".")
+        start = v["lead"] if v["lead_on"] else None
+        if v["lead_policy"] == "low":
+            # Fixa precisa de um valor: sem ele o fmp ficaria em 1,5 refresh (12,5 ms a 120 Hz).
+            return ["--present-lead-ms", ms(v["lead"]), "--lead-adapt", "off"]
+        out = ["--present-lead-ms", ms(start)] if start is not None else []
+        if v["lead_policy"] == "balanced":
+            out += ["--lead-max-ms", ms(max(v["lead_max"], start or 0.0))]
+        return out
+
     # ---------------------------------------------------------------- execução
 
     def toggle_run(self):
@@ -1401,8 +2377,12 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             return False
         return True
 
-    def start(self, kind):
+    def start(self, kind, confirmed=False):
         if not self.check_ready(kind):
+            return
+        est = self.est
+        if kind == "capture" and not confirmed and est and est["wants"] and not est["fits"]:
+            self.ask_quality(kind)
             return
         self.save_now()
         self.stopping = False
@@ -1415,6 +2395,31 @@ class HypeFrameWindow(Adw.ApplicationWindow):
                 self.launch_timer = GLib.timeout_add(2500, self.after_display, kind)
                 return
         self.launch(kind)
+
+    def ask_quality(self, kind):
+        """A qualidade escolhida não cabe no tempo de um quadro gerado: o fmp desligaria a geração."""
+        q = self.values["quality"]
+        warn = next((w for w in self.est["warns"] if "limite" in w), "")
+        d = Adw.AlertDialog(
+            heading="A geração de quadros vai desligar",
+            body=f"{warn}.\n\nA Média gera cada quadro em cerca de 2 ms em 4K nesta placa e mantém a geração ligada.")
+        d.add_response("cancel", "Cancelar")
+        d.add_response("keep", f"Iniciar com a {QUALITY_NAMES[q]}")
+        d.add_response("medium", "Usar a Média e iniciar")
+        d.set_response_appearance("medium", Adw.ResponseAppearance.SUGGESTED)
+        d.set_default_response("medium")
+        d.set_close_response("cancel")
+
+        def resp(_d, r):
+            if r == "medium":
+                self.set_value("quality", "medium")
+                self.refresh_all()
+                self.schedule_save()
+                self.start(kind, confirmed=True)
+            elif r == "keep":
+                self.start(kind, confirmed=True)
+        d.connect("response", resp)
+        d.present(self)
 
     def after_display(self, kind):
         self.launch_timer = 0
@@ -1441,7 +2446,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         conn = self.values["tv_connector"]
         if conn not in cur["monitors"]:
             self.alert("Tela do jogo não encontrada",
-                       f"A tela {conn} não está conectada. Ligue-a ou escolha outra em Tela e ritmo.")
+                       f"A tela {conn} não está conectada. Ligue-a ou escolha outra em Telas.")
             return False
         self.display = cur
         want = game_state(cur, conn, self.values["tv_apply"], self.values["tv_color"] == "hdr",
@@ -1503,6 +2508,12 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         self.proc_kind = kind
         self.saw_busy = False
         self.partial = b""
+        self.run_lines = []
+        self.run_eof = self.run_exited = False
+        self.run_config = self.session_config() if kind == "capture" else None
+        self.pcie_seen = []
+        if kind == "capture" and self.link and not self.pcie_timer:
+            self.pcie_timer = GLib.timeout_add(1000, self.sample_pcie)
         # Leitura em blocos: no PyGObject, read_line devolve b"" tanto para linha vazia quanto
         # para o fim do stream, e o laço não acabaria nunca.
         stream = self.proc.get_stdout_pipe()
@@ -1523,6 +2534,8 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             if self.partial:
                 self.on_line(self.partial)
                 self.partial = b""
+            self.run_eof = True
+            self.maybe_collect()
             return
         *lines, self.partial = (self.partial + data).split(b"\n")
         for line in lines:
@@ -1532,6 +2545,8 @@ class HypeFrameWindow(Adw.ApplicationWindow):
     def on_line(self, line):
         text = line.decode("utf-8", errors="replace").rstrip("\r")
         self.log(text)
+        if self.run_config is not None and len(self.run_lines) < 20000:
+            self.run_lines.append(text)
         if "busy" in text.lower():
             self.saw_busy = True
 
@@ -1565,6 +2580,11 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.toast(msg)
         if kind == "capture":
             self.finish_display()
+        if self.pcie_timer:
+            GLib.source_remove(self.pcie_timer)
+            self.pcie_timer = 0
+        self.run_exited = True
+        self.maybe_collect()
 
     def finish_display(self):
         args, self.restore_args = self.restore_args, None
