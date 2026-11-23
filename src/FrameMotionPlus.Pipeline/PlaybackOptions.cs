@@ -224,6 +224,13 @@ public sealed record PlaybackOptions
     /// </summary>
     public bool AdaptiveLead { get; init; } = true;
 
+    /// <summary>
+    /// Windowed: the most the adaptive present lead may rise to, ns. -1: about two refreshes (what the in-flight cap lets a
+    /// present be handed over before its own refresh). A lower cap keeps the latency down when the compositor misses its
+    /// latch now and then (each such frame is then shown a refresh late instead of every frame waiting longer).
+    /// </summary>
+    public long MaxPresentLeadNs { get; init; } = -1;
+
     /// <summary>Bounded waits of the teardown and of the virtual clock's lockstep (a hang becomes a failure).</summary>
     public long StallTimeoutNs { get; init; } = 10 * Nanoseconds.PerSecond;
 
@@ -237,6 +244,7 @@ public sealed record PlaybackOptions
         ArgumentOutOfRangeException.ThrowIfNegative(WarmupNs, nameof(WarmupNs));
         ArgumentOutOfRangeException.ThrowIfNegative(LatchLeadNs, nameof(LatchLeadNs));
         ArgumentOutOfRangeException.ThrowIfLessThan(PresentLeadNs, -1, nameof(PresentLeadNs));
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxPresentLeadNs, -1, nameof(MaxPresentLeadNs));
         if (Capture is not null && Clock == PlaybackClock.Virtual)
         {
             throw new ArgumentException("A live capture runs on the real clock: its frames come when they come.", nameof(Clock));

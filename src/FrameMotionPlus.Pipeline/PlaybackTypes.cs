@@ -427,6 +427,12 @@ public sealed class PlaybackReport
 
     public long FinalLeadNs { get; set; }
 
+    /// <summary>The most the lead could rise to at the end (<c>--lead-max-ms</c> or about two refreshes), ns; and whether it
+    /// adapted at all (<c>--lead-adapt</c>).</summary>
+    public long MaxLeadNs { get; set; }
+
+    public bool LeadAdaptive { get; set; } = true;
+
     /// <summary>What was added to the file's content times so its first frame is the first shown (long.MinValue: never set).</summary>
     public long ContentOffsetNs { get; set; } = long.MinValue;
 

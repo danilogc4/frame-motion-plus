@@ -94,6 +94,12 @@ internal sealed record PlayOptions
     /// <summary>-1: automatic (one refresh windowed, 0 offscreen).</summary>
     public double PresentLeadMs { get; init; } = -1;
 
+    /// <summary><c>--lead-max-ms</c>: cap on the adaptive present lead, ms (-1: about two refreshes).</summary>
+    public double MaxLeadMs { get; init; } = -1;
+
+    /// <summary><c>--lead-adapt on|off</c>: off keeps the present lead where it starts.</summary>
+    public bool AdaptiveLead { get; init; } = true;
+
     /// <summary>Variable refresh: how late a generated slot may be shown instead of skipped, ms (0: skipped).</summary>
     public double LateGeneratedMs { get; init; } = Pipeline.PlaybackOptions.LateGeneratedDefaultNs / 1e6;
 
@@ -159,6 +165,8 @@ internal sealed record PlayOptions
             VfxSdk = r.String("vfx-sdk"),
             WarmupS = r.Double("warmup-s", 2, 0, 600),
             PresentLeadMs = r.Double("present-lead-ms", -1, -1, 100),
+            MaxLeadMs = r.Double("lead-max-ms", -1, -1, 100),
+            AdaptiveLead = r.String("lead-adapt") is not { } adapt || Vfg.VfgBenchOptions.ParseOnOff(adapt, "lead-adapt"),
             LateGeneratedMs = r.Double("late-generated-ms", Pipeline.PlaybackOptions.LateGeneratedDefaultNs / 1e6, 0, 8),
             CeilingPacing = r.String("ceiling-pacing") is not { } ceiling || Vfg.VfgBenchOptions.ParseOnOff(ceiling, "ceiling-pacing"),
             LatchMs = r.Double("latch-ms", 1, 0, 50),

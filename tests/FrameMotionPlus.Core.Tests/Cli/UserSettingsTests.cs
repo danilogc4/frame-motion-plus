@@ -260,6 +260,29 @@ public sealed class UserSettingsTests : IDisposable
     }
 
     /// <summary>
+    /// <c>--lead-max-ms</c> (a cap on the adaptive present lead) and <c>--lead-adapt on|off</c> on both commands: no cap and
+    /// adapting by default, a value in ms, off kept fixed, a bad value refused, and both in the help.
+    /// </summary>
+    [Fact]
+    public void Lead_cap_and_adaptation_are_options_of_both_commands()
+    {
+        Assert.Equal(-1, CaptureOptions.Parse([]).MaxLeadMs);
+        Assert.True(CaptureOptions.Parse([]).AdaptiveLead);
+        Assert.Equal(-1, PlayOptions.Parse(["clip.mkv"]).MaxLeadMs);
+        Assert.True(PlayOptions.Parse(["clip.mkv"]).AdaptiveLead);
+        Assert.Equal(8, CaptureOptions.Parse(["--lead-max-ms", "8"]).MaxLeadMs);
+        Assert.Equal(6.5, PlayOptions.Parse(["clip.mkv", "--lead-max-ms=6.5"]).MaxLeadMs);
+        Assert.False(CaptureOptions.Parse(["--lead-adapt", "off"]).AdaptiveLead);
+        Assert.False(PlayOptions.Parse(["clip.mkv", "--lead-adapt=off"]).AdaptiveLead);
+        Assert.Contains("'--lead-adapt' expects on or off, got 'maybe'", Assert.Throws<UsageException>(() => CaptureOptions.Parse(["--lead-adapt", "maybe"])).Message, StringComparison.Ordinal);
+        Assert.Throws<UsageException>(() => CaptureOptions.Parse(["--lead-max-ms", "-5"]));
+        var help = Run("--help").Out;
+        Assert.Contains("--lead-max-ms <ms>        Windowed: the most the adaptive lead rises to", help, StringComparison.Ordinal);
+        Assert.Contains("--lead-adapt <on|off>     Windowed: off keeps the lead where it starts", help, StringComparison.Ordinal);
+        Assert.Contains("--present-lead-ms, --lead-max-ms, --lead-adapt,", help, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// <c>--scd on|off</c> (VFG's automatic shot-change detection) on both commands, off by default for a capture (a game's
     /// fast motion is what it takes for a cut) and on for a file; <c>generator.shotChangeDetection</c> saves it.
     /// </summary>

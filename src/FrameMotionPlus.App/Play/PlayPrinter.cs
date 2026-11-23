@@ -443,9 +443,18 @@ internal static class PlayPrinter
 
     private static string Ordinal(int n) => n switch { 1 => "first", 2 => "second", 3 => "third", _ => n.ToString(Ic) + "th" };
 
-    private static string LeadHistory(PlaybackReport r) => r.LeadRaises == 0
-        ? " (it did not need to adapt)"
-        : string.Create(Ic, $" (raised {r.LeadRaises}x when a frame's content missed the compositor's latch; peak {Ms(r.PeakLeadNs)} ms)");
+    private static string LeadHistory(PlaybackReport r)
+    {
+        if (!r.LeadAdaptive && r.MaxLeadNs > 0)
+        {
+            return " (fixed: --lead-adapt off)";
+        }
+
+        var most = r.MaxLeadNs > 0 ? string.Create(Ic, $"; at most {Ms(r.MaxLeadNs)} ms") : "";
+        return r.LeadRaises == 0
+            ? $" (it did not need to adapt{most})"
+            : string.Create(Ic, $" (raised {r.LeadRaises}x when a frame's content missed the compositor's latch; peak {Ms(r.PeakLeadNs)} ms{most})");
+    }
 
     private static string Ms(double ns) => (ns / 1e6).ToString("0.000", Ic);
 

@@ -226,6 +226,30 @@ public class LeadControllerTests
         c.Reset(12_500_000, 16_000_000, 2 * S);
         Assert.Equal(12_500_000, c.LeadNs);
     }
+
+    /// <summary>
+    /// --lead-max-ms: at 119.88 Hz the in-flight limit is about 16.2 ms (the 5.5 → 16.2 ms climb of the GNOME baseline of
+    /// 23/11/2026); a cap of 8 ms stops the climb there, a cap under the latch floor stays at the floor, and no cap (-1)
+    /// or one above the limit leaves the limit.
+    /// </summary>
+    [Fact]
+    public void A_lead_cap_stops_the_climb_but_never_goes_under_the_latch_floor()
+    {
+        const long limit = 16_183_000;
+        Assert.Equal(8 * Ms, PresentLoop.CappedMaxLead(limit, 8 * Ms, 1 * Ms));
+        Assert.Equal(1 * Ms, PresentLoop.CappedMaxLead(limit, 0, 1 * Ms));
+        Assert.Equal(limit, PresentLoop.CappedMaxLead(limit, -1, 1 * Ms));
+        Assert.Equal(limit, PresentLoop.CappedMaxLead(limit, 40 * Ms, 1 * Ms));
+
+        var c = new LeadController(5_500_000, PresentLoop.CappedMaxLead(limit, 8 * Ms, 1 * Ms), adaptive: true);
+        for (var t = 1L; t <= 6; t++)
+        {
+            _ = c.OnLateContent(t * S);
+        }
+
+        Assert.Equal(8 * Ms, c.LeadNs);
+        Assert.Equal(8 * Ms, c.PeakLeadNs);
+    }
 }
 
 /// <summary>Catching up after a late show without losing a new real frame where something else can be given up (pure).</summary>

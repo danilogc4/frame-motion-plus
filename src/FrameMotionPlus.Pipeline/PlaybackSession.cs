@@ -453,7 +453,8 @@ public sealed class PlaybackSession : IDisposable
             records,
             _o.PresentLeadNs,
             DefaultPresentLeadRefreshes,
-            _o.AdaptiveLead)
+            _o.AdaptiveLead,
+            _o.MaxPresentLeadNs)
         {
             BeforeJob = _hooks.BeforePresent,
             OnPresented = _hooks.OnPresented,
@@ -1380,6 +1381,8 @@ public sealed class PlaybackSession : IDisposable
             report.LeadRaises = pl.LeadRaises;
             report.PeakLeadNs = pl.PeakLeadNs;
             report.FinalLeadNs = pl.LeadNs;
+            report.MaxLeadNs = pl.MaxLeadNs;
+            report.LeadAdaptive = _o.AdaptiveLead;
         }
 
         report.FirstShownFrame = collector.FirstShownFrame;

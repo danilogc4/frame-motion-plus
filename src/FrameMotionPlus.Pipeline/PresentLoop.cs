@@ -108,6 +108,9 @@ internal sealed partial class PresentLoop : IDisposable
     private readonly LeadController _lead;
     private readonly long _configuredLeadNs;
     private readonly double _leadRefreshes;
+
+    /// <summary>The cap on the adaptive lead from <c>--lead-max-ms</c> (-1: none beyond the in-flight limit).</summary>
+    private readonly long _maxLeadCapNs;
     private FrameRate _knownRate;
     private bool _forceGrid;
     private bool _lateRealOutstanding;
@@ -210,8 +213,10 @@ internal sealed partial class PresentLoop : IDisposable
         int recordCapacity,
         long presentLeadNs = -1,
         double leadRefreshes = 1.5,
-        bool adaptiveLead = true)
+        bool adaptiveLead = true,
+        long maxPresentLeadNs = -1)
     {
+        _maxLeadCapNs = maxPresentLeadNs;
         _presenter = presenter;
         _display = display;
         _clock = clock;
@@ -258,6 +263,11 @@ internal sealed partial class PresentLoop : IDisposable
 
     /// <summary>The largest present lead used, ns.</summary>
     public long PeakLeadNs => _lead.PeakLeadNs;
+
+    /// <summary>The most the lead may rise to now, ns, and whether it adapts at all (after the run).</summary>
+    public long MaxLeadNs => _lead.MaxLeadNs;
+
+    public bool LeadAdaptive => _lead.Adaptive;
 
     /// <summary>Every change of the present lead (after the run: the present thread has stopped).</summary>
     public void CopyLeadChanges(List<(long AtNs, long LeadNs, LeadChange Why)> into)
@@ -1573,8 +1583,15 @@ internal sealed partial class PresentLoop : IDisposable
     private long BaseLead(FrameRate rate) =>
         _configuredLeadNs >= 0 ? _configuredLeadNs : rate.IsValid ? (long)Math.Round(_leadRefreshes * rate.PeriodNs) : 0;
 
-    /// <summary>The most a lead can usefully be: about the two refreshes the in-flight cap lets a present be handed over before its own.</summary>
-    private static long MaxLead(FrameRate rate) => rate.IsValid ? Math.Max(0, (long)(2 * rate.PeriodNs) - (2 * PollNs)) : 0;
+    /// <summary>The most a lead can usefully be: about the two refreshes the in-flight cap lets a present be handed over before
+    /// its own; lower when <c>--lead-max-ms</c> caps it (never under the latch floor).</summary>
+    private long MaxLead(FrameRate rate) =>
+        CappedMaxLead(rate.IsValid ? Math.Max(0, (long)(2 * rate.PeriodNs) - (2 * PollNs)) : 0, _maxLeadCapNs, _latchLeadNs);
+
+    /// <summary>The in-flight limit <paramref name="inFlightMaxNs"/>, lowered to <paramref name="capNs"/> when that is set (≥ 0),
+    /// but never under the latch floor <paramref name="latchLeadNs"/> nor above the limit.</summary>
+    internal static long CappedMaxLead(long inFlightMaxNs, long capNs, long latchLeadNs) =>
+        capNs >= 0 ? Math.Min(inFlightMaxNs, Math.Max(capNs, latchLeadNs)) : inFlightMaxNs;
 
     /// <summary>Sends the grid and lead to the pacing thread when first known, when the rate or lead changes, or when the phase moved by 100 µs.</summary>
     private void SendGrid(long now)

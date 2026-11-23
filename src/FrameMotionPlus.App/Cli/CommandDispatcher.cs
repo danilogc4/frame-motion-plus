@@ -332,6 +332,10 @@ internal static class CommandDispatcher
                                     ready; windowed: the compositor's latch, measured before playback, plus 2 ms, else
                                     1.5 refreshes; offscreen: 0). It adapts: up a millisecond at once when a frame decided
                                     too late misses the compositor's latch, slowly back down to where it started
+          --lead-max-ms <ms>        Windowed: the most the adaptive lead rises to (default about two refreshes). Lower
+                                    keeps every frame sooner; a frame that still misses the latch is shown a refresh late
+          --lead-adapt <on|off>     Windowed: off keeps the lead where it starts (--present-lead-ms), however many frames
+                                    miss the compositor's latch                                          (on)
           --latch-ms <ms>           The least a present is assumed to need before its refresh (offscreen: how early a
                                     slot is submitted; windowed: a floor under the adaptive lead)     (1)
           --scd <on|off>            VFG's automatic shot-change detection. On, VFG takes large, uneven change between
@@ -416,7 +420,8 @@ internal static class CommandDispatcher
                                     refresh, which --clock auto uses (the lowest latency); a window is fixed refresh
           --generator, --quality, --quality-switch, --no-quality-switch, --multiplier, --output-hz, --duration-s, --window,
           --fullscreen, --output, --clock, --validate, --csv, --settings, --no-settings, --vfx-sdk, --warmup-s,
-          --present-lead-ms, --latch-ms, --scd, --late-generated-ms, --ceiling-pacing, --cuda-sync   As for play (the
+          --present-lead-ms, --lead-max-ms, --lead-adapt,
+          --latch-ms, --scd, --late-generated-ms, --ceiling-pacing, --cuda-sync   As for play (the
                                     duration is unlimited by default: until Ctrl+C, closing the window or Escape)
                                     Without a device or --mode, the saved capture.device and capture.mode are used if set
           --offscreen               No window: an offscreen target on the real clock at --display-hz
