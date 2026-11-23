@@ -83,6 +83,7 @@ internal static class HdrPatternCommand
             WindowWidth = ww,
             WindowHeight = wh,
             Fullscreen = r.Flag("fullscreen"),
+            Output = r.String("output"),
             PeakNits = peak,
             MaxCll = maxCll,
             MaxFall = maxFall,

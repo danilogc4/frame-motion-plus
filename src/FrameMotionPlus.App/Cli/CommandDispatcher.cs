@@ -214,6 +214,7 @@ internal static class CommandDispatcher
                                                                                               (latch)
           --mode <fifo|fifo-latest-ready|mailbox|immediate>  The swapchain's present mode            (fifo)
           --fullscreen              Borderless fullscreen on the window's output (KWin's VRR "automatic" needs it)
+          --output <display>        The display fullscreen goes to, as for play
           --interval-ms <list>      With --test vrr: the intervals presented in turn          (1.37 and 1.71 refreshes)
           --duration-s <s>          Measured time, at most 120 s; Escape, closing the window, Ctrl+C or SIGTERM end it
                                     early with the results so far                             (10)
@@ -258,6 +259,7 @@ internal static class CommandDispatcher
           --duration-s <s>          How long                                                  (10)
           --window <WxH>            Window size; the pattern is drawn at its pixel size                     (1280x720)
           --fullscreen              Borderless fullscreen (keep it short: a 10,000-nit patch is unpleasant)
+          --output <display>        The display fullscreen goes to, as for play
           --hdr-peak-nits, --hdr-max-cll, --hdr-max-fall   The HDR metadata sent, as for capture
           --check                   No window: the HDR path proved by numbers, offscreen: each pattern encoded as a console
                                     sends it (P010, limited range, BT.2020, 4:2:0), converted by the capture's kernel, written
@@ -304,6 +306,9 @@ internal static class CommandDispatcher
           --frames <n>              Play this many output slots instead
           --window <WxH>            Window size                                               (1280x720)
           --fullscreen              Borderless fullscreen on the output the window is on (off by default)
+          --output <display>        The display fullscreen goes to: its name or a unique part of it (any case), its
+                            number, or @X,Y (its desktop position); a list is printed when nothing matches.
+                            Without it: the display the window opens on (GNOME: where the pointer is)
           --clock <auto|fixed|vrr>  Output slots on the display's refresh grid (fixed), or following the source with
                                     variable refresh (vrr: each present at its own time, the display refreshing for it).
                                     auto: vrr when fullscreen, a probe before playback shows the display following the
@@ -410,8 +415,8 @@ internal static class CommandDispatcher
                                     default capture is fullscreen on the window's output: there KWin gives it variable
                                     refresh, which --clock auto uses (the lowest latency); a window is fixed refresh
           --generator, --quality, --quality-switch, --no-quality-switch, --multiplier, --output-hz, --duration-s, --window,
-          --fullscreen, --clock, --validate, --csv, --settings, --no-settings, --vfx-sdk, --warmup-s, --present-lead-ms,
-          --latch-ms, --scd, --late-generated-ms, --ceiling-pacing, --cuda-sync   As for play (the
+          --fullscreen, --output, --clock, --validate, --csv, --settings, --no-settings, --vfx-sdk, --warmup-s,
+          --present-lead-ms, --latch-ms, --scd, --late-generated-ms, --ceiling-pacing, --cuda-sync   As for play (the
                                     duration is unlimited by default: until Ctrl+C, closing the window or Escape)
                                     Without a device or --mode, the saved capture.device and capture.mode are used if set
           --offscreen               No window: an offscreen target on the real clock at --display-hz

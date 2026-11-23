@@ -94,6 +94,10 @@ internal static unsafe partial class SdlNative
     [return: MarshalAs(UnmanagedType.U1)]
     public static partial bool MinimizeWindow(nint window);
 
+    [LibraryImport(Library, EntryPoint = "SDL_HideWindow")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool HideWindow(nint window);
+
     [LibraryImport(Library, EntryPoint = "SDL_HideCursor")]
     [return: MarshalAs(UnmanagedType.U1)]
     public static partial bool HideCursor();
@@ -111,6 +115,31 @@ internal static unsafe partial class SdlNative
 
     [LibraryImport(Library, EntryPoint = "SDL_GetCurrentDisplayMode")]
     public static partial DisplayMode* GetCurrentDisplayMode(uint displayId);
+
+    /// <summary>The connected displays (free the array with <see cref="Free"/>).</summary>
+    [LibraryImport(Library, EntryPoint = "SDL_GetDisplays")]
+    public static partial uint* GetDisplays(int* count);
+
+    [LibraryImport(Library, EntryPoint = "SDL_GetDisplayName")]
+    public static partial byte* GetDisplayName(uint displayId);
+
+    [LibraryImport(Library, EntryPoint = "SDL_GetDisplayBounds")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool GetDisplayBounds(uint displayId, Rect* rect);
+
+    /// <summary>
+    /// On Wayland a toplevel cannot place itself (this returns false), but SDL keeps the display asked for and uses
+    /// it when the window then goes fullscreen-desktop (xdg_toplevel.set_fullscreen on that output).
+    /// </summary>
+    [LibraryImport(Library, EntryPoint = "SDL_SetWindowPosition")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool SetWindowPosition(nint window, int x, int y);
+
+    [LibraryImport(Library, EntryPoint = "SDL_free")]
+    public static partial void Free(void* memory);
+
+    /// <summary>SDL_WINDOWPOS_CENTERED_DISPLAY(displayId).</summary>
+    public static int WindowPosCenteredDisplay(uint displayId) => unchecked((int)(0x2FFF0000u | displayId));
 
     [LibraryImport(Library, EntryPoint = "SDL_PollEvent")]
     [return: MarshalAs(UnmanagedType.U1)]
@@ -162,6 +191,15 @@ internal static unsafe partial class SdlNative
 
         [FieldOffset(37)]
         public byte Repeat;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect
+    {
+        public int X;
+        public int Y;
+        public int W;
+        public int H;
     }
 
     [StructLayout(LayoutKind.Sequential)]

@@ -20,6 +20,9 @@ internal sealed record HdrShowOptions
 
     public bool Fullscreen { get; init; }
 
+    /// <summary>--output: the display fullscreen goes to.</summary>
+    public string? Output { get; init; }
+
     public int PeakNits { get; init; } = ColorMetadata.DefaultPeakNits;
 
     public int? MaxCll { get; init; }
@@ -66,7 +69,7 @@ internal sealed class HdrShow : IDisposable
         Require(SdlWindow.IsLibraryAvailable(), "needs SDL3 (libSDL3.so.0)");
         try
         {
-            _window = SdlWindow.Create(new SdlWindowOptions { Title = $"fmp hdr-pattern - {HdrPatterns.Name(_o.Pattern)}", Width = _o.WindowWidth, Height = _o.WindowHeight });
+            _window = SdlWindow.Create(new SdlWindowOptions { Title = $"fmp hdr-pattern - {HdrPatterns.Name(_o.Pattern)}", Width = _o.WindowWidth, Height = _o.WindowHeight, Output = _o.Output });
             _instance = VulkanInstance.Create(new VulkanInstanceOptions
             {
                 ApplicationName = "fmp hdr-pattern",
@@ -129,6 +132,13 @@ internal sealed class HdrShow : IDisposable
             }
 
             Thread.Sleep(4);
+        }
+
+        // The display is read at the end: after a move to another output SDL reports it only once the compositor has
+        // shown the window there (0.3 to 1.8 s after the fullscreen request, measured on GNOME 51).
+        if (_o.Fullscreen)
+        {
+            Console.WriteLine($"  fullscreen  on '{window.CurrentDisplayName ?? "?"}'{(window.OutputName is null ? "" : " (--output)")}");
         }
 
         Output = Describe();

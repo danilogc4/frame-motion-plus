@@ -112,6 +112,9 @@ internal sealed record CaptureOptions
     /// <summary>Borderless fullscreen (the default unless --windowed or --window is given, or --offscreen).</summary>
     public bool Fullscreen { get; init; }
 
+    /// <summary>--output: the display fullscreen goes to.</summary>
+    public string? Output { get; init; }
+
     /// <summary>--clock: fixed refresh, variable refresh, or auto (variable when fullscreen and the display follows the presents).</summary>
     public Pipeline.RefreshMode Refresh { get; init; } = Pipeline.RefreshMode.Auto;
 
@@ -273,6 +276,7 @@ internal sealed record CaptureOptions
             // Fullscreen by default: there KWin gives the window variable refresh, which --clock auto then uses (the
             // lowest latency measured, Phase 6); --windowed or a --window size keeps a window (fixed refresh).
             Fullscreen = !offscreen && (fullscreen || !windowed),
+            Output = r.String("output"),
             Refresh = r.String("clock")?.ToLowerInvariant() switch
             {
                 null or "auto" => Pipeline.RefreshMode.Auto,

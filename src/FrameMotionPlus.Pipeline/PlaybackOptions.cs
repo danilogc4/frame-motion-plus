@@ -135,6 +135,9 @@ public sealed record PlaybackOptions
     /// <summary>Borderless fullscreen on the output the window is on, once it has shown a frame.</summary>
     public bool Fullscreen { get; init; }
 
+    /// <summary>--output: the display fullscreen goes to (a name, a part of it, a number or @X,Y); null: the window's.</summary>
+    public string? Output { get; init; }
+
     /// <summary>Fixed refresh, variable refresh, or variable when the display does it (windowed: fixed).</summary>
     public RefreshMode Refresh { get; init; } = RefreshMode.Auto;
 

@@ -64,6 +64,9 @@ internal sealed record PlayOptions
 
     public bool Fullscreen { get; init; }
 
+    /// <summary>--output: the display fullscreen goes to.</summary>
+    public string? Output { get; init; }
+
     /// <summary>--clock: fixed refresh, variable refresh, or auto (variable when fullscreen and the display follows the presents).</summary>
     public Pipeline.RefreshMode Refresh { get; init; } = Pipeline.RefreshMode.Auto;
 
@@ -137,6 +140,7 @@ internal sealed record PlayOptions
             WindowWidth = windowWidth,
             WindowHeight = windowHeight,
             Fullscreen = r.Flag("fullscreen"),
+            Output = r.String("output"),
             Refresh = r.String("clock")?.ToLowerInvariant() switch
             {
                 null or "auto" => Pipeline.RefreshMode.Auto,

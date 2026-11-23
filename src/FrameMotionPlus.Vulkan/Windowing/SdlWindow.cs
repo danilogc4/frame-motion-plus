@@ -1,3 +1,4 @@
+using System.Globalization;
 using FrameMotionPlus.Core.Time;
 using FrameMotionPlus.Vulkan.Interop;
 
@@ -16,6 +17,14 @@ public sealed record SdlWindowOptions
 
     /// <summary>SDL video driver to force (SDL_VIDEO_DRIVER). The design uses Wayland; null lets SDL choose.</summary>
     public string? VideoDriver { get; init; } = "wayland";
+
+    /// <summary>
+    /// The display fullscreen goes to (<c>--output</c>): a name (exact, else a unique part of it, any case), a 1-based
+    /// number in SDL's order, or <c>@X,Y</c> for the display at that desktop position. Null: the display the window is
+    /// on (on Wayland the compositor picks it, usually where the pointer is). A window cannot be placed on Wayland:
+    /// this only steers fullscreen.
+    /// </summary>
+    public string? Output { get; init; }
 }
 
 [Flags]
@@ -57,6 +66,7 @@ public sealed unsafe class SdlWindow : IDisposable
     private long _refresh;
     private int _refreshKnown;
     private int _presentShown;
+    private uint _targetDisplay;
 
     private SdlWindow(nint window)
     {
@@ -135,6 +145,21 @@ public sealed unsafe class SdlWindow : IDisposable
             throw new InvalidOperationException($"SDL video init failed: {SdlNative.LastError()}");
         }
 
+        uint target = 0;
+        string? targetName = null;
+        if (!string.IsNullOrWhiteSpace(options.Output))
+        {
+            try
+            {
+                (target, targetName) = ResolveOutput(options.Output.Trim());
+            }
+            catch (InvalidOperationException)
+            {
+                SdlNative.QuitSubSystem(SdlNative.InitVideo);
+                throw;
+            }
+        }
+
         var flags = SdlNative.WindowVulkan | SdlNative.WindowHighPixelDensity | (options.Resizable ? SdlNative.WindowResizable : 0);
         var window = SdlNative.CreateWindow(options.Title, options.Width, options.Height, flags);
         if (window == 0)
@@ -144,7 +169,96 @@ public sealed unsafe class SdlWindow : IDisposable
             throw new InvalidOperationException($"SDL_CreateWindow failed: {error}");
         }
 
-        return new SdlWindow(window);
+        return new SdlWindow(window) { _targetDisplay = target, OutputName = targetName };
+    }
+
+    /// <summary>The name of the display the window is on now (SDL's), or null before it is on one.</summary>
+    public string? CurrentDisplayName
+    {
+        get
+        {
+            var display = _window == 0 ? 0 : SdlNative.GetDisplayForWindow(_window);
+            return display == 0 ? null : Utf8.FromPointer(SdlNative.GetDisplayName(display));
+        }
+    }
+
+    /// <summary>The display <see cref="SdlWindowOptions.Output"/> chose (its SDL name), or null.</summary>
+    public string? OutputName { get; private init; }
+
+    /// <summary>The connected displays as SDL sees them: id, name and desktop bounds (SDL's video subsystem up).</summary>
+    public static IReadOnlyList<(uint Id, string Name, int X, int Y, int Width, int Height)> Displays()
+    {
+        var list = new List<(uint, string, int, int, int, int)>();
+        var count = 0;
+        var ids = SdlNative.GetDisplays(&count);
+        if (ids == null)
+        {
+            return list;
+        }
+
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                SdlNative.Rect r;
+                if (!SdlNative.GetDisplayBounds(ids[i], &r))
+                {
+                    r = default;
+                }
+
+                list.Add((ids[i], Utf8.FromPointer(SdlNative.GetDisplayName(ids[i])) ?? $"display {ids[i]}", r.X, r.Y, r.W, r.H));
+            }
+        }
+        finally
+        {
+            SdlNative.Free(ids);
+        }
+
+        return list;
+    }
+
+    private static (uint Id, string Name) ResolveOutput(string spec)
+    {
+        var displays = Displays();
+        string Listing() => string.Join("; ", displays.Select((d, i) =>
+            string.Create(CultureInfo.InvariantCulture, $"{i + 1} '{d.Name}' at @{d.X},{d.Y} ({d.Width}x{d.Height})")));
+
+        if (spec.StartsWith('@'))
+        {
+            var parts = spec[1..].Split(',');
+            if (parts.Length == 2 && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var x)
+                && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var y))
+            {
+                foreach (var d in displays)
+                {
+                    if (d.X == x && d.Y == y)
+                    {
+                        return (d.Id, d.Name);
+                    }
+                }
+            }
+
+            throw new InvalidOperationException($"no display at '--output {spec}'; displays: {Listing()}");
+        }
+
+        if (int.TryParse(spec, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+        {
+            if (number >= 1 && number <= displays.Count)
+            {
+                return (displays[number - 1].Id, displays[number - 1].Name);
+            }
+
+            throw new InvalidOperationException($"no display number {number} for '--output'; displays: {Listing()}");
+        }
+
+        var exact = displays.Where(d => string.Equals(d.Name, spec, StringComparison.OrdinalIgnoreCase)).ToList();
+        var matches = exact.Count > 0 ? exact : displays.Where(d => d.Name.Contains(spec, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Count switch
+        {
+            1 => (matches[0].Id, matches[0].Name),
+            0 => throw new InvalidOperationException($"no display matches '--output {spec}'; displays: {Listing()}"),
+            _ => throw new InvalidOperationException($"'--output {spec}' matches {matches.Count} displays (give its number or @X,Y); displays: {Listing()}"),
+        };
     }
 
     /// <summary>Drains SDL's event queue (allocation-free) and reports what happened to this window.</summary>
@@ -239,6 +353,15 @@ public sealed unsafe class SdlWindow : IDisposable
         // composite (KWin's "automatic" variable refresh wants the fullscreen window alone on the output). SDL hides it
         // over its own windows only; elsewhere it stays.
         _ = fullscreen ? SdlNative.HideCursor() : SdlNative.ShowCursor();
+
+        // --output: ask for the chosen display first. Wayland refuses the move itself (false is expected), but SDL
+        // keeps the display and hands its wl_output to the fullscreen request, so the compositor puts the window there.
+        if (fullscreen && _targetDisplay != 0)
+        {
+            var at = SdlNative.WindowPosCenteredDisplay(_targetDisplay);
+            _ = SdlNative.SetWindowPosition(_window, at, at);
+        }
+
         var ok = SdlNative.SetWindowFullscreen(_window, fullscreen);
         SdlNative.SyncWindow(_window);
         UpdatePixelSize();
@@ -255,6 +378,30 @@ public sealed unsafe class SdlWindow : IDisposable
     {
         ObjectDisposedException.ThrowIf(_window == 0, this);
         SdlNative.MinimizeWindow(_window);
+    }
+
+    /// <summary>
+    /// Takes the window off the screen before the teardown, while its swapchain images still exist, and waits for the
+    /// compositor to take it in. On GNOME (Mutter 51, NVIDIA) a fullscreen window whose images and surface were
+    /// destroyed while it was still shown left its last frame on the output until a workspace switch (22/11/2026).
+    /// Window thread.
+    /// </summary>
+    public void HideForTeardown(TimeSpan settle)
+    {
+        if (_window == 0)
+        {
+            return;
+        }
+
+        _ = SdlNative.ShowCursor();
+        _ = SdlNative.HideWindow(_window);
+        _ = SdlNative.SyncWindow(_window);
+        var until = Environment.TickCount64 + (long)settle.TotalMilliseconds;
+        while (Environment.TickCount64 < until)
+        {
+            _ = PumpEvents();
+            Thread.Sleep(10);
+        }
     }
 
     public void Dispose()

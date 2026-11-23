@@ -8,7 +8,10 @@ pela Elgato com geração de quadros NVIDIA VFG, no Bazzite/GNOME.
 - Perfis rápidos: "HDR fiel" e "Menor atraso" (valores medidos em `docs/gnome-mutter/PROPOSTA.md`).
 - Roda o fmp dentro da distrobox (`fmp` por padrão) e mostra a saída ao vivo; Ctrl+Enter inicia e para.
 - Avisa quando a placa de captura está em uso por outro programa e quando há outro monitor ligado.
-- Opcional: ajusta a TV pelo Mutter (`gdctl`: HDR/SDR, VRR, só a TV) antes de jogar e volta como estava ao parar.
+- Tela do jogo: qualquer tela conectada; o jogo abre nela em tela cheia (`fmp --output @X,Y`), esteja o mouse onde estiver.
+- Outras telas: uma chave para cada tela conectada, ligadas por padrão durante o jogo (para usar o OBS, por exemplo).
+  Desligar alguma deixa o ritmo mais liso, mas religá-la ao parar já deixou o GNOME instável.
+- Opcional: ajusta o HDR/SDR da tela do jogo pelo Mutter (`gdctl`) antes de jogar e volta como estava ao parar.
 - Guarda os últimos valores, a aba aberta e o tamanho da janela em `~/.config/hypeframe/config.json`.
 
 ## Instalar

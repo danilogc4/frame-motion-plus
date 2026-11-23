@@ -84,10 +84,11 @@ DEFAULTS = {
     "ceiling": True,
     "window": "1920x1080",
     "tv_apply": False,
-    "tv_connector": "",
+    "tv_connector": "",  # a tela do jogo (conector no Mutter: HDMI-1, DP-2...)
+    "game_output": True,  # abrir o jogo na tela do jogo (--output); falso: onde está o mouse
     "tv_color": "hdr",
-    "tv_vrr": True,
-    "tv_only": True,
+    "tv_vrr": False,
+    "others_off": [],  # conectores das outras telas a desligar durante o jogo
     "tv_restore": True,
     # Áudio
     "audio": "auto",
@@ -113,22 +114,26 @@ PROFILES = [
         "weather-clear-symbolic",
         {
             "mode": "4k30-hdr", "hdr": "on", "range": "limited", "matrix": "bt2020",
-            "clock": "auto", "tv_apply": True, "tv_color": "hdr", "tv_only": True,
-            "lead_on": False, "latch_on": False,
+            "clock": "auto", "tv_apply": True, "tv_color": "hdr", "tv_vrr": False,
+            "latch_on": False,
         },
     ),
     (
         "latency",
         "Menor atraso",
-        "TV em SDR com VRR e relógio VRR: 65 ms medidos, mas sem o HDR do PS5",
+        "Tela do jogo em SDR e relógio VRR: 65 ms medidos só com ela ligada, mas sem o HDR do PS5",
         "power-profile-performance-symbolic",
         {
             "mode": "4k30-hdr", "hdr": "follow", "range": "auto", "matrix": "auto",
-            "clock": "vrr", "tv_apply": True, "tv_color": "sdr", "tv_vrr": True,
-            "tv_only": True, "lead_on": False, "latch_on": False,
+            "clock": "vrr", "tv_apply": True, "tv_color": "sdr", "tv_vrr": False,
+            "latch_on": False,
         },
     ),
 ]
+# Os perfis não mexem nas outras telas: ligar ou desligar cada uma é escolha à parte (aba Tela e ritmo).
+
+CONFIG_VERSION = 2
+RESTORE_DELAY_MS = 1500
 
 EXIT_MEANING = {
     0: "O fmp terminou normalmente.",
@@ -233,8 +238,16 @@ def load_config():
             ):
                 values[k] = v
         extra = {k: v for k, v in data.items() if k != "values"}
+        if extra.get("version", 1) < 2:
+            # Versão 1 desligava as outras telas ("Só a TV") e ligava o VRR ao jogar. Religar o Dell ao parar
+            # deixava o GNOME instável (22/11/2026); o VRR do Mutter nem seguia a janela. Agora: tudo ligado, sem VRR.
+            values["others_off"] = []
+            values["tv_vrr"] = False
+            extra["migrated"] = True
     except (OSError, ValueError):
         pass
+    extra["version"] = CONFIG_VERSION
+    values["others_off"] = [c for c in values["others_off"] if isinstance(c, str)]
     return values, extra
 
 
@@ -360,26 +373,44 @@ def gdctl_args(state):
     return args
 
 
-def game_state(state, conn, hdr, vrr, only):
-    """O estado desejado para jogar, a partir do atual."""
+def game_state(state, conn, apply_color, hdr, vrr, off):
+    """O estado desejado para jogar, a partir do atual.
+
+    apply_color: mexer no modo de cor/VRR da tela do jogo. off: conectores das outras telas a desligar.
+    A tela do jogo nunca é desligada; se ela estiver fora do desktop, entra à direita.
+    """
     import copy
     want = copy.deepcopy(state)
     tv = want["monitors"][conn]
-    base = tv["mode"] or tv["preferred"]
-    base = base.replace("+vrr", "") if base else base
-    mode = base + "+vrr" if vrr and base and base + "+vrr" in tv["modes"] else base
-    tv["mode"] = mode
-    tv["color"] = 1 if hdr else 0
-    in_layout = any(conn in lm["monitors"] for lm in want["logical"])
-    if only:
-        old = next((lm for lm in want["logical"] if conn in lm["monitors"]), None)
-        lm = dict(old) if old else {"scale": 1.0, "transform": 0}
-        lm.update({"x": 0, "y": 0, "primary": True, "monitors": [conn]})
-        want["logical"] = [lm]
-    elif not in_layout:
+    if apply_color:
+        base = tv["mode"] or tv["preferred"]
+        base = base.replace("+vrr", "") if base else base
+        mode = base + "+vrr" if vrr and base and base + "+vrr" in tv["modes"] else base
+        tv["mode"] = mode
+        tv["color"] = 1 if hdr else 0
+    off = {c for c in off if c != conn}
+    if off:
+        kept = []
+        for lm in want["logical"]:
+            mons = [c for c in lm["monitors"] if c not in off]
+            if mons:
+                kept.append(dict(lm, monitors=mons))
+        want["logical"] = kept
+    if not any(conn in lm["monitors"] for lm in want["logical"]):
         right = max((lm["x"] + 10000 for lm in want["logical"]), default=0)
         want["logical"].append({"x": right, "y": 0, "scale": 1.0, "transform": 0,
                                 "primary": False, "monitors": [conn]})
+    if want["logical"] and not any(lm["primary"] for lm in want["logical"]):
+        for lm in want["logical"]:
+            lm["primary"] = conn in lm["monitors"]
+    if off and want["logical"]:
+        # O Mutter quer o desktop começando em 0,0: desloca o que sobrou. Telas que ficarem sem encostar
+        # umas nas outras (3+ telas, desligando a do meio) o GNOME recusa, e o HypeFrame mostra o erro.
+        dx = min(lm["x"] for lm in want["logical"])
+        dy = min(lm["y"] for lm in want["logical"])
+        for lm in want["logical"]:
+            lm["x"] -= dx
+            lm["y"] -= dy
     return want
 
 
@@ -393,17 +424,33 @@ def same_layout(a, b):
     return key(a) == key(b)
 
 
+def screen_label(conn, m):
+    """Nome de uma tela para o usuário: o nome do Mutter e o conector."""
+    return f"{m['name']} ({conn})" if m.get("name") else conn
+
+
+def active_connectors(state):
+    return [c for lm in state["logical"] for c in lm["monitors"]]
+
+
+def logical_position(state, conn):
+    """Posição da tela no desktop (a mesma que o SDL usa), para o --output @X,Y."""
+    for lm in state["logical"]:
+        if conn in lm["monitors"]:
+            return lm["x"], lm["y"]
+    return None
+
+
 def describe_tv(state, conn):
     m = state["monitors"].get(conn)
     if not m:
-        return f"{conn}: desconectada"
-    active = any(conn in lm["monitors"] for lm in state["logical"])
-    if not active:
-        return f"{conn}: desligada"
+        return f"{conn or 'Tela do jogo'}: desconectada"
+    if conn not in active_connectors(state):
+        return f"{screen_label(conn, m)}: desligada"
     color = {0: "SDR", 1: "HDR (bt2100)", 2: "SDR nativo"}.get(m["color"], str(m["color"]))
     others = sum(1 for lm in state["logical"] if conn not in lm["monitors"])
-    extra = f", mais {others} monitor(es)" if others else ", única tela"
-    return f"{conn}: {m['mode']}, {color}{extra}"
+    extra = f", mais {others} tela(s) ligada(s)" if others else ", única tela ligada"
+    return f"{m['mode']}, {color}{extra}"
 
 
 def holders(paths):
@@ -460,6 +507,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         self.proc_kind = None
         self.stopping = False
         self.launch_timer = 0
+        self.restore_timer = 0
         self.kill_timers = []
         self.restore_args = None
         self.chip_box = None
@@ -505,6 +553,9 @@ class HypeFrameWindow(Adw.ApplicationWindow):
 
         self.set_status("idle", "Parado", "")
         self.connect("close-request", self.on_close_request)
+        if self.extra.pop("migrated", False):
+            self.toast("Agora as outras telas ficam ligadas no jogo e o VRR fica desligado (ajuste em Tela e ritmo)")
+            self.schedule_save()
         self.install_shortcuts()
 
     # ---------------------------------------------------------------- layout
@@ -807,28 +858,41 @@ class HypeFrameWindow(Adw.ApplicationWindow):
     def page_display(self):
         page = Adw.PreferencesPage()
         tvg = Adw.PreferencesGroup(
-            title="TV no GNOME",
-            description="Antes de iniciar, o HypeFrame ajusta a TV pelo Mutter. Nos testes, outro monitor ligado deixou 17% dos quadros fora do ritmo")
+            title="Tela do jogo",
+            description="Onde o jogo abre em tela cheia. Vale para qualquer monitor ou TV ligado ao computador")
         self.tv_now = Adw.ActionRow(title="Agora", subtitle="")
         self.tv_now.add_css_class("property")
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", valign=Gtk.Align.CENTER,
-                             tooltip_text="Ler de novo")
+                             tooltip_text="Ler as telas de novo")
         refresh.add_css_class("flat")
         refresh.connect("clicked", lambda *_: self.reload_display())
         self.tv_now.add_suffix(refresh)
         tvg.add(self.tv_now)
-        tvg.add(self.switch("tv_apply", "Ajustar a TV antes de jogar"))
-        conns = [(c, f"{m['name']} ({c})") for c, m in self.display["monitors"].items()]
+        conns = [(c, screen_label(c, m)) for c, m in self.display["monitors"].items()]
         if self.values["tv_connector"] and self.values["tv_connector"] not in dict(conns):
             conns.append((self.values["tv_connector"], self.values["tv_connector"]))
-        tvg.add(self.combo("tv_connector", "TV", conns or [("", "Nenhum monitor encontrado")]))
-        tvg.add(self.toggles("tv_color", "Saída da TV",
+        tvg.add(self.combo("tv_connector", "Tela", conns or [("", "Nenhuma tela encontrada")]))
+        tvg.add(self.switch("game_output", "Abrir o jogo nesta tela",
+                            "Desligado: abre onde está o mouse (o GNOME decide)"))
+        tvg.add(self.switch("tv_apply", "Ajustar o modo de cor antes de jogar",
+                            "Muda o HDR/SDR desta tela pelo Mutter e volta ao parar"))
+        tvg.add(self.toggles("tv_color", "Modo de cor",
                              [("hdr", "HDR"), ("sdr", "SDR")],
-                             "HDR: cores do PS5. SDR: o Mutter compõe liso, menor atraso"))
-        tvg.add(self.switch("tv_vrr", "Taxa variável (VRR)"))
-        tvg.add(self.switch("tv_only", "Só a TV", "Desliga os outros monitores enquanto joga"))
-        tvg.add(self.switch("tv_restore", "Voltar como estava ao parar"))
+                             "HDR: cores do PS5. SDR: o Mutter compõe mais liso, menor atraso"))
+        tvg.add(self.switch("tv_vrr", "Taxa variável (VRR)",
+                            "O Mutter 51 não deu VRR à janela do fmp nos testes; ligar só muda o modo da tela"))
         page.add(tvg)
+
+        self.others_group = Adw.PreferencesGroup(
+            title="Outras telas durante o jogo",
+            description="Ligadas, você usa outros programas nelas (OBS, chat). Desligar deixa o ritmo mais liso, "
+                        "mas desligar e religar telas já deixou o GNOME instável ao parar (22/11/2026)")
+        self.others_rows = []
+        page.add(self.others_group)
+        self.restore_group = Adw.PreferencesGroup()
+        self.restore_group.add(self.switch("tv_restore", "Voltar as telas como estavam ao parar"))
+        page.add(self.restore_group)
+        self.build_others()
 
         rit = Adw.PreferencesGroup(title="Ritmo de apresentação",
                                    description="Nos testes no GNOME, 5,5 ms fixos baixaram os quadros fora do ritmo de 17% para 1,5% com dois monitores")
@@ -843,6 +907,56 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         rit.add(self.entry("window", "Tamanho da janela (LxA)", size=True))
         page.add(rit)
         return page
+
+    def build_others(self):
+        """Uma linha por tela conectada, menos a do jogo: ligada ou desligada durante o jogo."""
+        for row in self.others_rows:
+            self.others_group.remove(row)
+        self.others_rows = []
+        game = self.values["tv_connector"]
+        others = [(c, m) for c, m in self.display["monitors"].items() if c != game]
+        if not others:
+            row = Adw.ActionRow(title="Nenhuma outra tela conectada")
+            row.add_css_class("dim-label")
+            self.others_group.add(row)
+            self.others_rows.append(row)
+            return
+        active = active_connectors(self.display)
+        for conn, m in others:
+            sub = m["mode"] if conn in active and m["mode"] else "desligada agora"
+            row = Adw.SwitchRow(title=screen_label(conn, m), subtitle=f"{sub} · ligada durante o jogo")
+            row.set_active(conn not in self.values["others_off"])
+            row.connect("notify::active", lambda r, _p, c=conn: self.set_other(c, r.get_active()))
+            self.others_group.add(row)
+            self.others_rows.append(row)
+
+    def set_other(self, conn, keep_on):
+        off = [c for c in self.values["others_off"] if c != conn]
+        if not keep_on:
+            off.append(conn)
+        self.changed("others_off", off)
+
+    def plan_off(self):
+        """As outras telas que serão desligadas de fato (conectadas e ligadas agora)."""
+        active = active_connectors(self.display)
+        game = self.values["tv_connector"]
+        return [c for c in self.values["others_off"] if c != game and c in active]
+
+    def others_on_during_game(self):
+        game = self.values["tv_connector"]
+        off = set(self.plan_off())
+        return [c for c in active_connectors(self.display) if c != game and c not in off]
+
+    def output_arg(self):
+        """--output para o fmp: a posição da tela do jogo no desktop (única mesmo com dois monitores iguais)."""
+        v = self.values
+        if not v["game_output"] or not v["tv_connector"]:
+            return None
+        pos = logical_position(self.display, v["tv_connector"])
+        if pos is None:
+            m = self.display["monitors"].get(v["tv_connector"])
+            return m["name"] if m and m.get("name") else None
+        return f"@{pos[0]},{pos[1]}"
 
     def page_audio(self):
         page = Adw.PreferencesPage()
@@ -900,6 +1014,8 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         if self.values.get(key) == value:
             return
         self.values[key] = value
+        if key == "tv_connector" and hasattr(self, "others_group"):
+            self.build_others()
         self.refresh_all()
         self.schedule_save()
 
@@ -1013,9 +1129,11 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.rows["window"].set_sensitive(not v["fullscreen"])
         if "multiplier" in self.rows:
             self.rows["multiplier"].set_sensitive(not v["output_hz_on"])
-        for k in ("tv_connector", "tv_color", "tv_vrr", "tv_only", "tv_restore"):
+        for k in ("tv_color", "tv_vrr"):
             if k in self.rows:
                 self.rows[k].set_sensitive(v["tv_apply"])
+        if "tv_restore" in self.rows:
+            self.rows["tv_restore"].set_sensitive(v["tv_apply"] or bool(v["others_off"]))
         for k in ("peak", "maxcll_on", "maxfall", "range", "matrix"):
             if k in self.rows:
                 self.rows[k].set_sensitive(v["hdr"] != "off" or k in ("range", "matrix"))
@@ -1055,8 +1173,13 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         if v["hdr"] != "off":
             chips.append((f"HDR {v['peak']} nits", "violet"))
         if v["tv_apply"]:
-            chips.append((f"TV em {'HDR' if v['tv_color'] == 'hdr' else 'SDR'}"
+            chips.append((f"Tela em {'HDR' if v['tv_color'] == 'hdr' else 'SDR'}"
                           + (" + VRR" if v["tv_vrr"] else ""), ""))
+        on = len(self.others_on_during_game())
+        off = len(self.plan_off())
+        if on or off:
+            chips.append((f"{on} outra(s) tela(s) ligada(s)" if not off else
+                          f"{off} tela(s) desligada(s) no jogo", ""))
         chips.append(("Tela cheia" if v["fullscreen"] else "Janela", "violet"))
         for text, cls in chips:
             lab = Gtk.Label(label=text)
@@ -1073,11 +1196,10 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.banner.kind = "restore"
             self.banner.set_revealed(True)
             return
-        others = len(self.display["logical"]) > 1
-        if others and not (self.values["tv_apply"] and self.values["tv_only"]):
-            self.banner.set_title("Outro monitor ligado: no GNOME o ritmo fica irregular")
-            self.banner.set_button_label("Usar só a TV")
-            self.banner.kind = "only"
+        if self.others_on_during_game() and not self.values["lead_on"]:
+            self.banner.set_title("Outras telas ligadas: no GNOME o ritmo fica irregular sem antecedência fixa")
+            self.banner.set_button_label("Usar 5,5 ms")
+            self.banner.kind = "lead"
             self.banner.set_revealed(True)
             return
         self.banner.set_revealed(False)
@@ -1086,17 +1208,19 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         if getattr(self.banner, "kind", "") == "restore":
             self.restore_display(self.extra.get("pending_restore"))
         else:
-            self.set_value("tv_apply", True)
-            self.set_value("tv_only", True)
+            self.set_value("lead", 5.5)
+            self.set_value("lead_on", True)
             self.refresh_all()
             self.schedule_save()
-            self.toast("Ao iniciar, os outros monitores serão desligados")
+            self.toast("Antecedência fixa de 5,5 ms (com dois monitores: de 17% para 1,5% de quadros fora do ritmo)")
 
     def reload_display(self):
         try:
             self.display = display_state()
         except GLib.Error as e:
             self.toast(f"Não li o estado dos monitores: {e.message}")
+        if hasattr(self, "others_group"):
+            self.build_others()
         self.refresh_all()
 
     def apply_profile(self, pid):
@@ -1160,8 +1284,10 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         argv.append(self.fmp_path())
         if kind == "list":
             return argv + ["capture", "--list"]
+        out = self.output_arg()
         if kind == "peak":
-            return argv + ["hdr-pattern", "peak", "--fullscreen", "--duration-s", "20",
+            return argv + ["hdr-pattern", "peak", "--fullscreen", "--duration-s", "20"] + (
+                ["--output", out] if out else []) + [
                            "--hdr-peak-nits", str(v["peak"])] + (
                 ["--hdr-max-cll", str(v["maxcll"])] if v["maxcll_on"] else [])
 
@@ -1193,6 +1319,8 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             a += ["--cuda-sync", v["cuda_sync"]]
         if v["fullscreen"]:
             a.append("--fullscreen")
+            if out:
+                a += ["--output", out]
         else:
             a += ["--window", v["window"]]
         a += ["--clock", v["clock"]]
@@ -1239,13 +1367,16 @@ class HypeFrameWindow(Adw.ApplicationWindow):
     # ---------------------------------------------------------------- execução
 
     def toggle_run(self):
+        if self.restore_timer:
+            self.toast("Esperando as telas voltarem")
+            return
         if self.proc or self.launch_timer:
             self.stop()
         else:
             self.start("capture")
 
     def run_tool(self, kind):
-        if self.proc or self.launch_timer:
+        if self.proc or self.launch_timer or self.restore_timer:
             self.toast("Pare o fmp antes")
             return
         self.start(kind)
@@ -1275,11 +1406,11 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             return
         self.save_now()
         self.stopping = False
-        if kind == "capture" and self.values["tv_apply"]:
+        if kind == "capture" and (self.values["tv_apply"] or self.plan_off()):
             if not self.prepare_display():
                 return
             if self.restore_args is not None:
-                self.set_status("busy", "Ajustando a TV", "Esperando a TV ressincronizar")
+                self.set_status("busy", "Ajustando as telas", "Esperando as telas ressincronizarem")
                 self.set_play(True)
                 self.launch_timer = GLib.timeout_add(2500, self.after_display, kind)
                 return
@@ -1291,11 +1422,11 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             self.display = display_state()
         except GLib.Error:
             pass
-        self.log("Tela agora: " + describe_tv(self.display, self.values["tv_connector"]))
+        self.log("Tela do jogo agora: " + describe_tv(self.display, self.values["tv_connector"]))
         want_hdr = self.values["tv_color"] == "hdr"
         tv = self.display["monitors"].get(self.values["tv_connector"])
-        if tv and (tv["color"] == 1) != want_hdr:
-            self.toast("A TV não ficou no modo de cor pedido (veja a saída)")
+        if self.values["tv_apply"] and tv and (tv["color"] == 1) != want_hdr:
+            self.toast("A tela do jogo não ficou no modo de cor pedido (veja a saída)")
         self.refresh_all()
         self.launch(kind)
         return False
@@ -1309,10 +1440,12 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             return False
         conn = self.values["tv_connector"]
         if conn not in cur["monitors"]:
-            self.alert("TV não encontrada", f"O conector {conn} não está conectado. Ligue a TV ou desative “Ajustar a TV”.")
+            self.alert("Tela do jogo não encontrada",
+                       f"A tela {conn} não está conectada. Ligue-a ou escolha outra em Tela e ritmo.")
             return False
-        want = game_state(cur, conn, self.values["tv_color"] == "hdr", self.values["tv_vrr"],
-                          self.values["tv_only"])
+        self.display = cur
+        want = game_state(cur, conn, self.values["tv_apply"], self.values["tv_color"] == "hdr",
+                          self.values["tv_vrr"], self.plan_off())
         if same_layout(cur, want):
             self.log("Tela já está como pedido: " + describe_tv(cur, conn))
             return True
@@ -1325,7 +1458,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
             return False
         if r.returncode != 0:
             self.log((r.stdout + r.stderr).strip())
-            self.alert("O GNOME recusou a configuração da TV", (r.stderr or r.stdout).strip()[:600])
+            self.alert("O GNOME recusou a configuração das telas", (r.stderr or r.stdout).strip()[:600])
             return False
         if self.values["tv_restore"]:
             self.restore_args = gdctl_args(cur)
@@ -1436,7 +1569,17 @@ class HypeFrameWindow(Adw.ApplicationWindow):
     def finish_display(self):
         args, self.restore_args = self.restore_args, None
         if args:
-            self.restore_display(args)
+            # Folga antes de devolver as telas: o fmp acabou de sair e a janela em tela cheia some nesse instante.
+            # Reconfigurar as telas no mesmo décimo de segundo deixou o GNOME instável (22/11/2026).
+            before = self.last_status
+            self.set_status("busy", "Voltando as telas", "")
+
+            def later():
+                self.restore_timer = 0
+                self.restore_display(args)
+                self.set_status(*before)
+                return False
+            self.restore_timer = GLib.timeout_add(RESTORE_DELAY_MS, later)
         self.update_banner()
 
     def stop(self):
@@ -1486,6 +1629,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
                 b.remove_css_class("running")
 
     def set_status(self, kind, title, detail):
+        self.last_status = (kind, title, detail)
         for c in ("running", "busy", "error"):
             self.side_dot.remove_css_class(c)
         if kind != "idle":
@@ -1525,6 +1669,11 @@ class HypeFrameWindow(Adw.ApplicationWindow):
         d.present(self)
 
     def on_close_request(self, *_):
+        if self.restore_timer and not self.proc:
+            # Fechando durante a folga: devolve as telas já, senão o tempo some com a janela.
+            GLib.source_remove(self.restore_timer)
+            self.restore_timer = 0
+            self.restore_display(self.extra.get("pending_restore"))
         w, h = self.get_default_size()
         self.extra["size"] = [w, h]
         self.save_now()
@@ -1546,7 +1695,7 @@ class HypeFrameWindow(Adw.ApplicationWindow):
 
     def quit_when_done(self):
         def check():
-            if self.proc or self.launch_timer:
+            if self.proc or self.launch_timer or self.restore_timer:
                 return True
             self.destroy()
             return False

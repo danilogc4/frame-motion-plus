@@ -95,6 +95,7 @@ internal static class PlayCommand
             WindowWidth = options.WindowWidth,
             WindowHeight = options.WindowHeight,
             Fullscreen = options.Fullscreen,
+            Output = options.Output,
             Refresh = options.Refresh,
             Validate = options.Validate,
             WarmupNs = (long)(options.WarmupS * Nanoseconds.PerSecond),

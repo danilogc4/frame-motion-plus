@@ -225,6 +225,7 @@ public sealed class PlaybackSession : IDisposable
                     Title = capture is null ? $"fmp play - {Path.GetFileName(_o.Path)}" : $"fmp capture - {_o.Path}",
                     Width = _o.WindowWidth,
                     Height = _o.WindowHeight,
+                    Output = _o.Output,
                 });
             }
             catch (InvalidOperationException e)
@@ -487,7 +488,7 @@ public sealed class PlaybackSession : IDisposable
             VfxSdk = sdk,
             GeneratorMayBlock = _generator?.Generator.Capabilities.EnqueueMayBlock ?? false,
             Display = _target is SwapchainTarget swapchain
-                ? $"window {_window!.PixelWidth}x{_window.PixelHeight} px ({_window.VideoDriver}), swapchain {swapchain.SwapchainFormatName} / {swapchain.SwapchainColorSpaceName}"
+                ? $"window {_window!.PixelWidth}x{_window.PixelHeight} px ({_window.VideoDriver}){(_window.OutputName is { } output ? $", fullscreen to '{output}' (--output)" : "")}, swapchain {swapchain.SwapchainFormatName} / {swapchain.SwapchainColorSpaceName}"
                 : string.Create(CultureInfo.InvariantCulture, $"offscreen {_target.Width}x{_target.Height} {((OffscreenTarget)_target).PixelFormat} at a nominal {_o.OffscreenRate} Hz, {(_o.Clock == PlaybackClock.Virtual ? "virtual clock" : "real clock")}"),
             FeedbackMode = _target is SwapchainTarget feedback
                 ? feedback.ActiveFeedback + (feedback.PresentTimingUnavailableReason is { } noTiming
@@ -1510,6 +1511,13 @@ public sealed class PlaybackSession : IDisposable
             {
                 errors.Add(e);
             }
+        }
+
+        // The window off the screen first, with its images still alive: on GNOME a fullscreen window torn down while
+        // shown left its last frame on the output (as hdr-pattern minimises and bench present leaves fullscreen first).
+        if (_window is { } shown)
+        {
+            Try(() => shown.HideForTeardown(TimeSpan.FromMilliseconds(150)));
         }
 
         // Work on the generator stream that never finishes (a wait for a point nothing will reach, a generator that does

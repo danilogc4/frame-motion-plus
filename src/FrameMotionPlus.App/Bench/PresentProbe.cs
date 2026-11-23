@@ -31,6 +31,9 @@ internal sealed record PresentProbeOptions
 
     public bool Fullscreen { get; init; }
 
+    /// <summary>--output: the display fullscreen goes to.</summary>
+    public string? Output { get; init; }
+
     public double DurationSeconds { get; init; } = 10;
 
     /// <summary>The longest run (a fullscreen probe covers its output for as long as it runs).</summary>
@@ -80,6 +83,9 @@ internal sealed record PresentProbeOptions
                     break;
                 case "--fullscreen":
                     o = o with { Fullscreen = true };
+                    break;
+                case "--output":
+                    o = o with { Output = Value() };
                     break;
                 case "--duration-s":
                     o = o with { DurationSeconds = double.Parse(Value(), CultureInfo.InvariantCulture) };
@@ -179,7 +185,7 @@ internal sealed class PresentProbe
 
         using var sigint = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal);
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal);
-        using var window = SdlWindow.Create(new SdlWindowOptions { Title = "fmp bench present", Width = _o.WindowWidth, Height = _o.WindowHeight });
+        using var window = SdlWindow.Create(new SdlWindowOptions { Title = "fmp bench present", Width = _o.WindowWidth, Height = _o.WindowHeight, Output = _o.Output });
         _window = window;
         using var instance = VulkanInstance.Create(new VulkanInstanceOptions
         {
@@ -221,7 +227,7 @@ internal sealed class PresentProbe
             var period = rate.PeriodNs;
             var phase = Phase(period);
             _out.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"fmp bench present: {_o.Test}, {target.PresentModeName}, {(_o.Fullscreen ? "fullscreen" : "windowed")} {window.PixelWidth}x{window.PixelHeight} px, " +
+                $"fmp bench present: {_o.Test}, {target.PresentModeName}, {(_o.Fullscreen ? "fullscreen" : "windowed")} {window.PixelWidth}x{window.PixelHeight} px on '{window.CurrentDisplayName ?? "?"}', " +
                 $"output {rate.Hz:0.###} Hz (period {period / 1e6:0.0000} ms); swapchain {target.SwapchainFormatName}; present timing {target.PresentTimingStage}"));
             _samples.Clear();
             _byId.Clear();
